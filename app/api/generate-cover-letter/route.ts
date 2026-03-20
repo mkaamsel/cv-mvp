@@ -21,8 +21,18 @@ export async function POST(req: Request) {
     const outputLanguage: OutputLanguage =
       language === "German" ? "German" : "English";
 
+    const greetingRule =
+      outputLanguage === "German"
+        ? 'Start directly with "Sehr geehrte Damen und Herren," if no contact person is known.'
+        : 'Start directly with "Dear Hiring Manager," if no contact person is known.';
+
+    const closingRule =
+      outputLanguage === "German"
+        ? 'End with: "Mit freundlichen Grüßen"'
+        : 'End with: "Kind regards"';
+
     const prompt = `
-You are a senior career coach and CV expert specializing in finance and accounting roles, with strong knowledge of the German job market.
+You are a professional job application writer specializing in finance and accounting roles in Germany.
 
 INPUT:
 
@@ -33,45 +43,26 @@ Job Description:
 ${jobText}
 
 TASK:
+Write a short, modern, professional cover letter based only on the provided CV and job description.
 
-1. Analyze the job description and extract:
-   - key skills
-   - keywords
-   - responsibilities
+RULES:
+- Write in ${outputLanguage}.
+- Keep it concise and credible.
+- Do NOT invent experience, qualifications, numbers, or achievements.
+- Do NOT use exaggerated or overly promotional language.
+- Tailor the wording to the job description.
+- Keep the tone contemporary and professional.
+- No markdown code fences.
+- No headings like subject line or sender/receiver address block.
+- ${greetingRule}
 
-2. Rewrite the CV so that:
-   - it is strongly aligned to the job
-   - keywords are naturally integrated
-   - responsibilities are clearly structured and relevant
-   - wording is precise, professional, and factual
+STRUCTURE:
+1. Short opening with motivation and role fit
+2. Main paragraph with relevant experience and strengths
+3. Short closing with availability / interest in discussion
+4. ${closingRule}
 
-3. Improve wording:
-   - use strong but realistic action verbs
-   - avoid exaggeration or inflated claims
-   - focus on clarity and relevance
-
-4. Structure the output EXACTLY as:
-
-PROFILE
-(4–5 lines, targeted summary, factual tone)
-
-KEY SKILLS
-(bullet list tailored to job)
-
-PROFESSIONAL EXPERIENCE
-(each role rewritten with concise, relevant bullet points)
-
-CRITICAL RULES:
-- Output language must be ${outputLanguage}.
-- Do NOT invent experience.
-- Do NOT add any numbers, percentages, or metrics unless explicitly present in the input.
-- Keep tone professional, precise, and credible.
-- Avoid overly promotional language.
-- Return plain text only.
-- Do NOT use markdown code fences.
-- Do NOT start with \`\`\`markdown or \`\`\`.
-
-OUTPUT IN CLEAN PLAIN TEXT.
+Return plain text only.
 `;
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -85,7 +76,7 @@ OUTPUT IN CLEAN PLAIN TEXT.
         messages: [
           {
             role: "system",
-            content: `You are a helpful CV optimization assistant. Always write the final output in ${outputLanguage}.`,
+            content: `You are a helpful cover letter writing assistant. Always write the final output in ${outputLanguage}.`,
           },
           {
             role: "user",
@@ -99,9 +90,9 @@ OUTPUT IN CLEAN PLAIN TEXT.
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("OpenAI CV API error:", data);
+      console.error("OpenAI cover letter API error:", data);
       return NextResponse.json(
-        { error: data?.error?.message || "Failed to generate CV" },
+        { error: data?.error?.message || "Failed to generate cover letter" },
         { status: 500 }
       );
     }
@@ -116,7 +107,7 @@ OUTPUT IN CLEAN PLAIN TEXT.
 
     return NextResponse.json({ output });
   } catch (error) {
-    console.error("API error:", error);
+    console.error("Cover letter API error:", error);
     return NextResponse.json(
       { error: "Internal Server Error" },
       { status: 500 }

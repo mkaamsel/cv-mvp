@@ -1,69 +1,79 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
-export default function Home() {
-  const [inputText, setInputText] = useState("");
-  const [outputText, setOutputText] = useState("");
+export default function HomePage() {
+  const supabase = createSupabaseBrowserClient();
 
-  const handleGenerate = async () => {
-    if (!inputText.trim()) {
-      setOutputText("Please paste some CV or job text first.");
-      return;
-    }
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-    setOutputText("Processing...");
+  useEffect(() => {
+    const loadUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-    try {
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ input: inputText }),
-      });
+      setUser(user);
+      setLoading(false);
+    };
 
-      const data = await res.json();
-      setOutputText(data.output || "No response received.");
-    } catch (error) {
-      setOutputText("Error processing request.");
-    }
-  };
+    loadUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  if (loading) {
+    return (
+      <main style={{ padding: "2rem" }}>
+        <h1>CV Tailor MVP</h1>
+        <p>Loading...</p>
+      </main>
+    );
+  }
 
   return (
-    <main className="min-h-screen bg-white px-6 py-10">
-      <div className="mx-auto max-w-4xl">
-        <h1 className="text-3xl font-bold tracking-tight">CV MVP</h1>
-        <p className="mt-2 text-gray-600">
-          Paste CV text or job description and generate improved output.
-        </p>
+    <main style={{ padding: "2rem" }}>
+      <h1>CV Tailor MVP</h1>
+      <p style={{ marginTop: "0.75rem" }}>
+        Build tailored CVs from your base profile and a job description.
+      </p>
 
-        <div className="mt-8">
-          <label className="mb-2 block text-sm font-medium">Input text</label>
-          <textarea
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            placeholder="Paste CV text or job description here..."
-            className="min-h-[240px] w-full rounded-xl border border-gray-300 p-4 outline-none"
-          />
-        </div>
+      {!user ? (
+        <div style={{ display: "flex", gap: "1rem", marginTop: "2rem" }}>
+          <Link href="/signup">
+            <button style={{ padding: "0.9rem 1.2rem", cursor: "pointer" }}>
+              Sign up
+            </button>
+          </Link>
 
-        <div className="mt-4">
-          <button
-            onClick={handleGenerate}
-            className="rounded-xl bg-black px-5 py-3 text-white"
-          >
-            Generate
-          </button>
+          <Link href="/login">
+            <button style={{ padding: "0.9rem 1.2rem", cursor: "pointer" }}>
+              Log in
+            </button>
+          </Link>
         </div>
+      ) : (
+        <div style={{ marginTop: "2rem" }}>
+          <p style={{ marginBottom: "1rem" }}>You are logged in.</p>
 
-        <div className="mt-8">
-          <label className="mb-2 block text-sm font-medium">Output</label>
-          <div className="min-h-[240px] whitespace-pre-wrap rounded-xl border border-gray-300 p-4">
-            {outputText || "Your generated output will appear here."}
-          </div>
+          <Link href="/dashboard">
+            <button style={{ padding: "0.9rem 1.2rem", cursor: "pointer" }}>
+              Go to Dashboard
+            </button>
+          </Link>
         </div>
-      </div>
+      )}
     </main>
   );
 }
