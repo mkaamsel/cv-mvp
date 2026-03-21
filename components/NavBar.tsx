@@ -44,37 +44,57 @@ export default function NavBar() {
   };
 
   return (
-    <nav
-      style={{
-        display: "flex",
-        gap: "1.5rem",
-        alignItems: "center",
-        padding: "1rem 2rem",
-        borderBottom: "1px solid #ddd",
-        marginBottom: "1.5rem",
-      }}
-    >
-      <Link href="/">Home</Link>
+    <header className="sticky top-0 z-50 border-b border-white/10 bg-slate-950/70 backdrop-blur-xl">
+      <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+        <Link href="/" className="flex items-center gap-2">
+          <span className="text-xl font-semibold tracking-tight text-white">
+            CV-MVP
+          </span>
+        </Link>
 
-      {!user ? (
-        <>
-          <Link href="/login">Login</Link>
-          <Link href="/signup">Sign up</Link>
-        </>
-      ) : (
-        <button
-          onClick={handleLogout}
-          style={{
-            cursor: "pointer",
-            background: "none",
-            border: "none",
-            padding: 0,
-            font: "inherit",
-          }}
-        >
-          Logout
-        </button>
-      )}
-    </nav>
+        <div className="flex items-center gap-3 sm:gap-4">
+          <Link
+            href="/"
+            className="text-sm font-medium text-slate-300 transition hover:text-white"
+          >
+            Home
+          </Link>
+
+          {!user ? (
+            <>
+              <Link
+                href="/login"
+                className="text-sm font-medium text-slate-300 transition hover:text-white"
+              >
+                Login
+              </Link>
+
+              <Link
+                href="/signup"
+                className="inline-flex items-center justify-center rounded-xl bg-teal-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-teal-300"
+              >
+                Sign up
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link
+                href="/dashboard"
+                className="text-sm font-medium text-slate-300 transition hover:text-white"
+              >
+                Dashboard
+              </Link>
+
+              <button
+                onClick={handleLogout}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+              >
+                Logout
+              </button>
+            </>
+          )}
+        </div>
+      </nav>
+    </header>
   );
 }
