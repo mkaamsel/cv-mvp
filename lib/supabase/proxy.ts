@@ -8,7 +8,7 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   const isProtected = protectedRoutes.some(
-    (route) => pathname === route || pathname.startsWith(`${route}/`)
+    (route) => pathname === route || pathname.startsWith(`${route}/`),
   );
 
   if (!isProtected) {
@@ -36,7 +36,7 @@ export async function proxy(request: NextRequest) {
           });
         },
       },
-    }
+    },
   );
 
   const {

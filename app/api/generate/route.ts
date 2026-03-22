@@ -1,124 +1,119 @@
 import { NextResponse } from "next/server";
 
 type OutputLanguage = "English" | "German";
+type WritingLevel =
+  | "Simple professional"
+  | "B2 professional"
+  | "C1 professional"
+  | "Strong polished professional";
+
+type OpenAIMessage = {
+  role: "system" | "user";
+  content: string;
+};
+
+async function callOpenAI(messages: OpenAIMessage[], temperature = 0.3) {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature,
+      messages,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI API error: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content ?? "";
+}
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { cvText, jobText, language } = body as {
-      cvText?: string;
-      jobText?: string;
-      language?: OutputLanguage;
-    };
+
+    const cvText = body.cvText?.trim() || "";
+    const jobText = body.jobText?.trim() || "";
+    const outputLanguage: OutputLanguage = body.outputLanguage || "English";
+    const writingLevel: WritingLevel =
+      body.writingLevel || "Simple professional";
 
     if (!cvText || !jobText) {
       return NextResponse.json(
-        { error: "Missing CV or Job Description" },
+        { error: "CV text and job description are required." },
         { status: 400 }
       );
     }
 
-    const outputLanguage: OutputLanguage =
-      language === "German" ? "German" : "English";
+    // Input safety limits
+    const CV_LIMIT = 10000;
+    const JD_LIMIT = 12000;
 
-    const prompt = `
-You are a senior career coach and CV expert specializing in finance and accounting roles, with strong knowledge of the German job market.
-
-INPUT:
-
-Base CV:
-${cvText}
-
-Job Description:
-${jobText}
-
-TASK:
-
-1. Analyze the job description and extract:
-   - key skills
-   - keywords
-   - responsibilities
-
-2. Rewrite the CV so that:
-   - it is strongly aligned to the job
-   - keywords are naturally integrated
-   - responsibilities are clearly structured and relevant
-   - wording is precise, professional, and factual
-
-3. Improve wording:
-   - use strong but realistic action verbs
-   - avoid exaggeration or inflated claims
-   - focus on clarity and relevance
-
-4. Structure the output EXACTLY as:
-
-PROFILE
-(4–5 lines, targeted summary, factual tone)
-
-KEY SKILLS
-(bullet list tailored to job)
-
-PROFESSIONAL EXPERIENCE
-(each role rewritten with concise, relevant bullet points)
-
-CRITICAL RULES:
-- Output language must be ${outputLanguage}.
-- Do NOT invent experience.
-- Do NOT add any numbers, percentages, or metrics unless explicitly present in the input.
-- Keep tone professional, precise, and credible.
-- Avoid overly promotional language.
-- Return plain text only.
-- Do NOT use markdown code fences.
-- Do NOT start with \`\`\`markdown or \`\`\`.
-
-OUTPUT IN CLEAN PLAIN TEXT.
-`;
-
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `You are a helpful CV optimization assistant. Always write the final output in ${outputLanguage}.`,
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-        temperature: 0.5,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error("OpenAI CV API error:", data);
+    if (cvText.length > CV_LIMIT) {
       return NextResponse.json(
-        { error: data?.error?.message || "Failed to generate CV" },
-        { status: 500 }
+        { error: "Your CV is very long. Please keep it under 10,000 characters." },
+        { status: 400 }
       );
     }
 
-    let output = data?.choices?.[0]?.message?.content || "No response from AI.";
+    if (jobText.length > JD_LIMIT) {
+      return NextResponse.json(
+        {
+          error:
+            "The job description is very long. Please keep it under 12,000 characters.",
+        },
+        { status: 400 }
+      );
+    }
 
-    output = output
-      .replace(/^```markdown\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
+    const systemPrompt = `
+You are a professional CV tailoring assistant for finance, accounting, controlling, reporting, HGB and IFRS roles in Germany.
 
-    return NextResponse.json({ output });
+Your task:
+- Rewrite the candidate CV so it fits the target role better
+- Keep the CV compact, clear and professional
+- Improve wording, structure and relevance
+- Do NOT invent experience, qualifications, software, leadership scope, languages, industries, or achievements
+- Only use information present in the CV
+- Emphasize the most relevant experience for the job description
+- Remove irrelevant repetition
+- Keep the result easy to read
+- Output only the tailored CV text
+- Output language: ${outputLanguage}
+- Writing level: ${writingLevel}
+`;
+
+    const userPrompt = `
+MASTER CV:
+${cvText}
+
+JOB DESCRIPTION:
+${jobText}
+
+Please create a tailored CV for this role.
+`;
+
+    const result = await callOpenAI(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      0.3
+    );
+
+    return NextResponse.json({ result });
   } catch (error) {
-    console.error("API error:", error);
+    console.error("Generate CV error:", error);
+
     return NextResponse.json(
-      { error: "Internal Server Error" },
+      { error: "Something went wrong while generating the CV." },
       { status: 500 }
     );
   }

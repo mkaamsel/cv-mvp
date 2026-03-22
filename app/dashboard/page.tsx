@@ -2,80 +2,72 @@
 
 import Link from "next/link";
 
-const cardStyle: React.CSSProperties = {
-  border: "1px solid #ddd",
-  borderRadius: "12px",
-  padding: "1.25rem",
-  backgroundColor: "#fff",
-};
-
-const buttonStyle: React.CSSProperties = {
-  display: "inline-block",
-  padding: "0.9rem 1rem",
-  cursor: "pointer",
-  width: "100%",
-  textAlign: "center",
-  border: "1px solid #ccc",
-  borderRadius: "10px",
-  background: "#f8f8f8",
-  textDecoration: "none",
-  color: "inherit",
-  fontWeight: 500,
-};
-
 export default function Dashboard() {
   return (
-    <main style={{ padding: "2rem", maxWidth: "960px", margin: "0 auto" }}>
-      <section style={{ marginBottom: "2rem" }}>
-        <h1 style={{ marginBottom: "0.5rem" }}>Dashboard</h1>
-        <p style={{ color: "#555", margin: 0 }}>
-          Manage your base profile, create tailored application drafts, and review saved versions.
+    <main className="mx-auto max-w-5xl px-6 py-10 text-white">
+      <section className="mb-8 max-w-3xl">
+        <p className="text-sm font-medium uppercase tracking-[0.2em] text-teal-300">
+          Workspace
+        </p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white md:text-4xl">
+          Dashboard
+        </h1>
+        <p className="mt-3 text-base leading-7 text-slate-300">
+          Manage your base profile, create tailored application drafts, and review saved
+          versions.
         </p>
       </section>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: "1rem",
-        }}
-      >
-        <div style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Profile</h2>
-          <p style={{ color: "#666", minHeight: "3rem" }}>
+      <section className="grid gap-6 md:grid-cols-2">
+        <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-2xl shadow-black/20">
+          <h2 className="text-xl font-semibold text-white">Profile</h2>
+          <p className="mt-3 min-h-[4.5rem] text-base leading-7 text-slate-300">
             Save your full name and master CV used for tailoring.
           </p>
-          <Link href="/profile" style={buttonStyle}>
+          <Link
+            href="/profile"
+            className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-white transition hover:bg-white/10"
+          >
             Edit Profile
           </Link>
         </div>
 
-        <div style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tailoring</h2>
-          <p style={{ color: "#666", minHeight: "3rem" }}>
-            Paste a job description and generate a fresh tailored CV and cover letter draft.
+        <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-2xl shadow-black/20">
+          <h2 className="text-xl font-semibold text-white">Tailoring</h2>
+          <p className="mt-3 min-h-[4.5rem] text-base leading-7 text-slate-300">
+            Paste a job description and generate a fresh tailored CV and cover letter
+            draft.
           </p>
-          <Link href="/tailoring/new" style={buttonStyle}>
+          <Link
+            href="/tailoring"
+            className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-teal-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300"
+          >
             Create New Tailored Draft
           </Link>
         </div>
 
-        <div style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Saved CVs</h2>
-          <p style={{ color: "#666", minHeight: "3rem" }}>
+        <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-2xl shadow-black/20">
+          <h2 className="text-xl font-semibold text-white">Saved CVs</h2>
+          <p className="mt-3 min-h-[4.5rem] text-base leading-7 text-slate-300">
             Review the CV drafts you have already generated and saved.
           </p>
-          <Link href="/dashboard/cvs" style={buttonStyle}>
+          <Link
+            href="/dashboard/cvs"
+            className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-white transition hover:bg-white/10"
+          >
             View Saved CVs
           </Link>
         </div>
 
-        <div style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Cover Letter History</h2>
-          <p style={{ color: "#666", minHeight: "3rem" }}>
+        <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-2xl shadow-black/20">
+          <h2 className="text-xl font-semibold text-white">Cover Letter History</h2>
+          <p className="mt-3 min-h-[4.5rem] text-base leading-7 text-slate-300">
             Review, edit, and reuse parts of previously generated cover letter drafts.
           </p>
-          <Link href="/dashboard/cover-letters" style={buttonStyle}>
+          <Link
+            href="/dashboard/cover-letters"
+            className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-white transition hover:bg-white/10"
+          >
             View Cover Letter History
           </Link>
         </div>

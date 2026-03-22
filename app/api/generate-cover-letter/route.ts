@@ -1,115 +1,116 @@
 import { NextResponse } from "next/server";
 
 type OutputLanguage = "English" | "German";
+type WritingLevel =
+  | "Simple professional"
+  | "B2 professional"
+  | "C1 professional"
+  | "Strong polished professional";
+
+type OpenAIMessage = {
+  role: "system" | "user";
+  content: string;
+};
+
+async function callOpenAI(messages: OpenAIMessage[], temperature = 0.3) {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature,
+      messages,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI API error: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content ?? "";
+}
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { cvText, jobText, language } = body as {
-      cvText?: string;
-      jobText?: string;
-      language?: OutputLanguage;
-    };
+
+    const cvText = body.cvText?.trim() || "";
+    const jobText = body.jobText?.trim() || "";
+    const outputLanguage: OutputLanguage = body.outputLanguage || "English";
+    const writingLevel: WritingLevel =
+      body.writingLevel || "Simple professional";
 
     if (!cvText || !jobText) {
       return NextResponse.json(
-        { error: "Missing CV or Job Description" },
+        { error: "CV text and job description are required." },
         { status: 400 }
       );
     }
 
-    const outputLanguage: OutputLanguage =
-      language === "German" ? "German" : "English";
+    // Input safety limits
+    const CV_LIMIT = 10000;
+    const JD_LIMIT = 12000;
 
-    const greetingRule =
-      outputLanguage === "German"
-        ? 'Start directly with "Sehr geehrte Damen und Herren," if no contact person is known.'
-        : 'Start directly with "Dear Hiring Manager," if no contact person is known.';
-
-    const closingRule =
-      outputLanguage === "German"
-        ? 'End with: "Mit freundlichen Grüßen"'
-        : 'End with: "Kind regards"';
-
-    const prompt = `
-You are a professional job application writer specializing in finance and accounting roles in Germany.
-
-INPUT:
-
-Base CV:
-${cvText}
-
-Job Description:
-${jobText}
-
-TASK:
-Write a short, modern, professional cover letter based only on the provided CV and job description.
-
-RULES:
-- Write in ${outputLanguage}.
-- Keep it concise and credible.
-- Do NOT invent experience, qualifications, numbers, or achievements.
-- Do NOT use exaggerated or overly promotional language.
-- Tailor the wording to the job description.
-- Keep the tone contemporary and professional.
-- No markdown code fences.
-- No headings like subject line or sender/receiver address block.
-- ${greetingRule}
-
-STRUCTURE:
-1. Short opening with motivation and role fit
-2. Main paragraph with relevant experience and strengths
-3. Short closing with availability / interest in discussion
-4. ${closingRule}
-
-Return plain text only.
-`;
-
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `You are a helpful cover letter writing assistant. Always write the final output in ${outputLanguage}.`,
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-        temperature: 0.5,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error("OpenAI cover letter API error:", data);
+    if (cvText.length > CV_LIMIT) {
       return NextResponse.json(
-        { error: data?.error?.message || "Failed to generate cover letter" },
-        { status: 500 }
+        { error: "Your CV is very long. Please keep it under 10,000 characters." },
+        { status: 400 }
       );
     }
 
-    let output = data?.choices?.[0]?.message?.content || "No response from AI.";
+    if (jobText.length > JD_LIMIT) {
+      return NextResponse.json(
+        {
+          error:
+            "The job description is very long. Please keep it under 12,000 characters.",
+        },
+        { status: 400 }
+      );
+    }
 
-    output = output
-      .replace(/^```markdown\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
+    const systemPrompt = `
+You are a professional cover letter assistant for accounting, finance, controlling, reporting, HGB and IFRS roles in Germany.
 
-    return NextResponse.json({ output });
+Your task:
+- Write a short, professional, tailored cover letter
+- Base it only on the candidate CV and the job description
+- Do NOT invent qualifications, experience, software, languages, or achievements
+- Keep the tone realistic and credible
+- Keep it concise and suitable for real applications
+- Output only the cover letter text
+- Output language: ${outputLanguage}
+- Writing level: ${writingLevel}
+`;
+
+    const userPrompt = `
+CANDIDATE CV:
+${cvText}
+
+JOB DESCRIPTION:
+${jobText}
+
+Please create a tailored cover letter for this role.
+`;
+
+    const result = await callOpenAI(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      0.4
+    );
+
+    return NextResponse.json({ result });
   } catch (error) {
-    console.error("Cover letter API error:", error);
+    console.error("Generate cover letter error:", error);
+
     return NextResponse.json(
-      { error: "Internal Server Error" },
+      { error: "Something went wrong while generating the cover letter." },
       { status: 500 }
     );
   }

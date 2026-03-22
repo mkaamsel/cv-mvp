@@ -38,12 +38,8 @@ export default function HomePage() {
       <main className="min-h-screen bg-slate-950 text-white">
         <div className="mx-auto flex min-h-screen max-w-6xl items-center px-6 py-16">
           <div>
-            <p className="text-sm uppercase tracking-[0.2em] text-slate-400">
-              CV-MVP
-            </p>
-            <h1 className="mt-4 text-4xl font-semibold tracking-tight">
-              Loading...
-            </h1>
+            <p className="text-sm uppercase tracking-[0.2em] text-slate-400">CV-MVP</p>
+            <h1 className="mt-4 text-4xl font-semibold tracking-tight">Loading...</h1>
           </div>
         </div>
       </main>
@@ -66,14 +62,12 @@ export default function HomePage() {
             </div>
 
             <h1 className="mt-6 text-4xl font-semibold leading-tight tracking-tight text-white md:text-6xl">
-              Create job applications that feel specific, credible, and worth
-              reading.
+              Create job applications that feel specific, credible, and worth reading.
             </h1>
 
             <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300">
-              Upload your base CV, paste the job description, and generate a
-              tailored CV and cover letter designed to match the role in
-              minutes.
+              Upload your base CV, paste the job description, and generate a tailored CV
+              and cover letter designed to match the role in minutes.
             </p>
 
             <div className="mt-10 flex flex-col gap-4 sm:flex-row">
@@ -107,8 +101,8 @@ export default function HomePage() {
             <div className="mb-4 text-sm font-medium text-teal-300">Step 1</div>
             <h2 className="text-xl font-semibold text-white">Upload your base CV</h2>
             <p className="mt-3 text-sm leading-7 text-slate-300">
-              Start with your existing profile and work from the experience you
-              already have.
+              Start with your existing profile and work from the experience you already
+              have.
             </p>
           </div>
 
@@ -118,8 +112,8 @@ export default function HomePage() {
               Paste the job description
             </h2>
             <p className="mt-3 text-sm leading-7 text-slate-300">
-              Give the system the role context so the application can be adapted
-              to the actual requirements.
+              Give the system the role context so the application can be adapted to the
+              actual requirements.
             </p>
           </div>
 
@@ -129,8 +123,8 @@ export default function HomePage() {
               Generate tailored documents
             </h2>
             <p className="mt-3 text-sm leading-7 text-slate-300">
-              Get a sharper CV and cover letter that feel more relevant, clear,
-              and professionally positioned.
+              Get a sharper CV and cover letter that feel more relevant, clear, and
+              professionally positioned.
             </p>
           </div>
         </div>
@@ -146,10 +140,9 @@ export default function HomePage() {
               Built to improve relevance, not just generate text.
             </h2>
             <p className="mt-4 max-w-2xl text-base leading-8 text-slate-300">
-              The goal is not to flood applications with generic AI language.
-              The goal is to help candidates present their experience more
-              clearly, more specifically, and in a way that matches the role
-              they actually want.
+              The goal is not to flood applications with generic AI language. The goal is
+              to help candidates present their experience more clearly, more specifically,
+              and in a way that matches the role they actually want.
             </p>
           </div>
 
@@ -175,8 +168,8 @@ export default function HomePage() {
               Stop sending the same application everywhere.
             </h2>
             <p className="mt-4 text-base leading-8 text-slate-300">
-              Create tailored applications that look more deliberate, more
-              relevant, and more worth reading.
+              Create tailored applications that look more deliberate, more relevant, and
+              more worth reading.
             </p>
 
             <div className="mt-8 flex flex-col gap-4 sm:flex-row">

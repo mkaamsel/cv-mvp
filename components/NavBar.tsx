@@ -47,9 +47,7 @@ export default function NavBar() {
     <header className="sticky top-0 z-50 border-b border-white/10 bg-slate-950/70 backdrop-blur-xl">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
         <Link href="/" className="flex items-center gap-2">
-          <span className="text-xl font-semibold tracking-tight text-white">
-            CV-MVP
-          </span>
+          <span className="text-xl font-semibold tracking-tight text-white">CV-MVP</span>
         </Link>
 
         <div className="flex items-center gap-3 sm:gap-4">

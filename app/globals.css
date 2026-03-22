@@ -6,6 +6,7 @@
   --muted: #9fb0c3;
   --card: rgba(255, 255, 255, 0.06);
   --card-border: rgba(255, 255, 255, 0.1);
+  --accent: #2dd4bf;
 }
 
 @theme inline {
@@ -41,9 +42,43 @@ a {
 
 button {
   font: inherit;
+  color: var(--foreground);
 }
 
 ::selection {
   background: rgba(45, 212, 191, 0.28);
   color: white;
+}
+
+/* ---------- Form contrast fixes ---------- */
+
+input,
+textarea,
+select {
+  color: var(--foreground);
+  background-color: var(--card);
+  border: 1px solid var(--card-border);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+label {
+  color: var(--foreground);
+}
+
+option {
+  color: #111827;
+}
+
+/* Improve focus visibility */
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
 }

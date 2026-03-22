@@ -10,27 +10,6 @@ type CVRecord = {
   created_at: string;
 };
 
-const buttonStyle: React.CSSProperties = {
-  padding: "0.75rem 1rem",
-  cursor: "pointer",
-  border: "1px solid #ccc",
-  borderRadius: "10px",
-  background: "#f8f8f8",
-};
-
-const dangerButtonStyle: React.CSSProperties = {
-  ...buttonStyle,
-  border: "1px solid #d6a5a5",
-};
-
-const textareaStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "0.85rem",
-  border: "1px solid #ccc",
-  borderRadius: "10px",
-  resize: "vertical",
-};
-
 export default function CVListPage() {
   const supabase = createSupabaseBrowserClient();
 
@@ -72,13 +51,11 @@ export default function CVListPage() {
 
   const handleCopy = async (text: string) => {
     await navigator.clipboard.writeText(text);
-    alert("Copied to clipboard!");
+    alert("Copied to clipboard.");
   };
 
   const handleChange = (id: string, value: string) => {
-    setCvs((prev) =>
-      prev.map((cv) => (cv.id === id ? { ...cv, content: value } : cv))
-    );
+    setCvs((prev) => prev.map((cv) => (cv.id === id ? { ...cv, content: value } : cv)));
   };
 
   const handleSave = async (id: string, content: string) => {
@@ -169,109 +146,97 @@ export default function CVListPage() {
   };
 
   return (
-    <main style={{ padding: "2rem", maxWidth: "1000px", margin: "0 auto" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "1rem",
-          flexWrap: "wrap",
-          marginBottom: "1.5rem",
-        }}
-      >
-        <div>
-          <h1 style={{ marginBottom: "0.5rem" }}>My Saved CVs</h1>
-          <p style={{ color: "#555", margin: 0 }}>
+    <main className="mx-auto max-w-5xl px-6 py-10 text-white">
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-2xl">
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-teal-300">
+            Saved drafts
+          </p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white md:text-4xl">
+            My Saved CVs
+          </h1>
+          <p className="mt-3 text-base leading-7 text-slate-300">
             Review, edit, copy, delete, and create new versions of your generated CVs.
           </p>
         </div>
 
         <Link
           href="/dashboard"
-          style={{
-            ...buttonStyle,
-            textDecoration: "none",
-            color: "inherit",
-            display: "inline-block",
-          }}
+          className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10"
         >
           Back to Dashboard
         </Link>
       </div>
 
-      {message && <p>{message}</p>}
+      {message && (
+        <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm font-medium text-slate-200 backdrop-blur">
+          {message}
+        </div>
+      )}
 
-      {cvs.map((cv) => (
-        <section
-          key={cv.id}
-          style={{
-            marginTop: "1rem",
-            padding: "1.25rem",
-            border: "1px solid #ddd",
-            borderRadius: "12px",
-            background: "#fff",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: "1rem",
-              flexWrap: "wrap",
-              marginBottom: "1rem",
-            }}
+      <div className="space-y-6">
+        {cvs.map((cv) => (
+          <section
+            key={cv.id}
+            className="rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-2xl shadow-black/20"
           >
-            <p style={{ margin: 0 }}>
-              <strong>Created:</strong> {new Date(cv.created_at).toLocaleString()}
-            </p>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+              <p className="text-sm text-slate-300">
+                <span className="font-semibold text-slate-100">Created:</span>{" "}
+                {new Date(cv.created_at).toLocaleString()}
+              </p>
 
-            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-              <button onClick={() => handleCopy(cv.content)} style={buttonStyle}>
-                Copy CV
-              </button>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => handleCopy(cv.content)}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10"
+                >
+                  Copy CV
+                </button>
 
-              <button
-                onClick={() => handleSave(cv.id, cv.content)}
-                style={buttonStyle}
-                disabled={savingId === cv.id}
-              >
-                {savingId === cv.id ? "Saving..." : "Save Changes"}
-              </button>
+                <button
+                  onClick={() => handleSave(cv.id, cv.content)}
+                  disabled={savingId === cv.id}
+                  className="rounded-xl bg-teal-400 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {savingId === cv.id ? "Saving..." : "Save Changes"}
+                </button>
 
-              <button
-                onClick={() => handleSaveAsNewVersion(cv.id, cv.content)}
-                style={buttonStyle}
-                disabled={creatingVersionId === cv.id}
-              >
-                {creatingVersionId === cv.id ? "Saving New Version..." : "Save as New Version"}
-              </button>
+                <button
+                  onClick={() => handleSaveAsNewVersion(cv.id, cv.content)}
+                  disabled={creatingVersionId === cv.id}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {creatingVersionId === cv.id
+                    ? "Saving New Version..."
+                    : "Save as New Version"}
+                </button>
 
-              <button
-                onClick={() => handleDelete(cv.id)}
-                style={dangerButtonStyle}
-                disabled={deletingId === cv.id}
-              >
-                {deletingId === cv.id ? "Deleting..." : "Delete"}
-              </button>
+                <button
+                  onClick={() => handleDelete(cv.id)}
+                  disabled={deletingId === cv.id}
+                  className="rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-2.5 text-sm font-medium text-red-200 transition hover:bg-red-400/20 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {deletingId === cv.id ? "Deleting..." : "Delete"}
+                </button>
+              </div>
             </div>
-          </div>
 
-          <textarea
-            value={cv.content}
-            onChange={(e) => handleChange(cv.id, e.target.value)}
-            rows={18}
-            style={textareaStyle}
-          />
+            <textarea
+              value={cv.content}
+              onChange={(e) => handleChange(cv.id, e.target.value)}
+              rows={18}
+              className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-white placeholder:text-slate-500 outline-none transition focus:border-teal-300"
+            />
 
-          {itemMessage[cv.id] && (
-            <p style={{ marginTop: "0.75rem", color: "#555" }}>
-              {itemMessage[cv.id]}
-            </p>
-          )}
-        </section>
-      ))}
+            {itemMessage[cv.id] && (
+              <p className="mt-3 text-sm font-medium text-slate-300">
+                {itemMessage[cv.id]}
+              </p>
+            )}
+          </section>
+        ))}
+      </div>
     </main>
   );
 }

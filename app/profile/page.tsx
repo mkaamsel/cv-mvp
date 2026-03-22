@@ -1,134 +1,170 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-
-const inputStyle: React.CSSProperties = {
-  padding: "0.85rem",
-  border: "1px solid #ccc",
-  borderRadius: "10px",
-  width: "100%",
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: "0.85rem 1rem",
-  cursor: "pointer",
-  border: "1px solid #ccc",
-  borderRadius: "10px",
-  background: "#f8f8f8",
-};
+import mammoth from "mammoth";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export default function ProfilePage() {
-  const [fullName, setFullName] = useState("");
+  const supabase = createSupabaseBrowserClient();
+
   const [cvText, setCvText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    const savedName = localStorage.getItem("fullName") || "";
-    const savedCV = localStorage.getItem("cvText") || "";
+    const loadProfile = async () => {
+      try {
+        setLoading(true);
+        setMessage("");
 
-    setFullName(savedName);
-    setCvText(savedCV);
-  }, []);
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+        if (userError || !user) {
+          setMessage("You must be logged in to view your profile.");
+          setLoading(false);
+          return;
+        }
 
-    localStorage.setItem("fullName", fullName);
-    localStorage.setItem("cvText", cvText);
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("cv_text")
+          .eq("id", user.id)
+          .maybeSingle();
 
-    setMessage("Profile saved locally.");
+        if (error) {
+          console.error(error);
+          setMessage("Could not load profile.");
+        } else if (data?.cv_text) {
+          setCvText(data.cv_text);
+        }
+      } catch (err) {
+        console.error(err);
+        setMessage("Something went wrong while loading your profile.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProfile();
+  }, [supabase]);
+
+  const handleCVUpload = async (file: File) => {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+
+      const result = await mammoth.extractRawText({
+        arrayBuffer,
+      });
+
+      setCvText(result.value);
+      setMessage("CV text extracted. Review and save.");
+    } catch (err) {
+      console.error(err);
+      setMessage("Could not read the CV file.");
+    }
   };
 
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      setMessage("");
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        setMessage("You must be logged in to save your profile.");
+        return;
+      }
+
+      const { error } = await supabase.from("profiles").upsert({
+        id: user.id,
+        cv_text: cvText,
+      });
+
+      if (error) {
+        console.error(error);
+        setMessage("Could not save profile.");
+        return;
+      }
+
+      setMessage("Profile saved successfully.");
+    } catch (err) {
+      console.error(err);
+      setMessage("Something went wrong while saving.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
+        <div className="mx-auto max-w-3xl">Loading profile...</div>
+      </main>
+    );
+  }
+
   return (
-    <main style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "1rem",
-          flexWrap: "wrap",
-          marginBottom: "1.5rem",
-        }}
-      >
-        <div>
-          <h1 style={{ marginBottom: "0.5rem" }}>Base Profile</h1>
-          <p style={{ color: "#555", margin: 0 }}>
-            Save your name and master CV. This will be used when generating tailored applications.
-          </p>
-        </div>
-
-        <Link
-          href="/dashboard"
-          style={{
-            ...buttonStyle,
-            textDecoration: "none",
-            color: "inherit",
-            display: "inline-block",
-          }}
-        >
-          Back to Dashboard
-        </Link>
-      </div>
-
-      <form
-        onSubmit={handleSave}
-        style={{
-          display: "grid",
-          gap: "1rem",
-          border: "1px solid #ddd",
-          borderRadius: "12px",
-          padding: "1.25rem",
-          background: "#fff",
-        }}
-      >
-        <div>
-          <label
-            htmlFor="fullName"
-            style={{ display: "block", marginBottom: "0.5rem", fontWeight: 600 }}
-          >
-            Full name
-          </label>
-          <input
-            id="fullName"
-            type="text"
-            placeholder="Enter your full name"
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-            style={inputStyle}
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="cvText"
-            style={{ display: "block", marginBottom: "0.5rem", fontWeight: 600 }}
-          >
-            Master CV
-          </label>
-          <textarea
-            id="cvText"
-            placeholder="Paste your master CV here"
-            value={cvText}
-            onChange={(e) => setCvText(e.target.value)}
-            rows={18}
-            style={{ ...inputStyle, resize: "vertical" }}
-          />
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "flex-start" }}>
-          <button type="submit" style={buttonStyle}>
-            Save Profile
-          </button>
-        </div>
-      </form>
-
-      {message && (
-        <p style={{ marginTop: "1rem", color: "#0a7a2f", fontWeight: 500 }}>
-          {message}
+    <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
+      <div className="mx-auto max-w-3xl">
+        <h1 className="text-3xl font-semibold">Profile</h1>
+        <p className="mt-2 text-sm text-slate-300">
+          Save your master CV here. You can paste it manually or upload a DOCX file.
         </p>
-      )}
+
+        <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
+          <div className="mt-4">
+            <label className="mb-2 block text-sm font-medium text-slate-200">
+              Upload CV (.docx)
+            </label>
+
+            <input
+              type="file"
+              accept=".docx"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleCVUpload(file);
+              }}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white"
+            />
+          </div>
+
+          <div className="mt-6">
+            <label className="mb-2 block text-sm font-medium text-slate-200">
+              Master CV
+            </label>
+
+            <textarea
+              value={cvText}
+              onChange={(e) => setCvText(e.target.value)}
+              rows={18}
+              placeholder="Paste your master CV here..."
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder:text-slate-400"
+            />
+          </div>
+
+          <div className="mt-4 flex items-center gap-4">
+            <button
+  onClick={handleSave}
+  disabled={saving}
+  className="rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-500 disabled:text-slate-200"
+>
+  {saving ? "Saving..." : "Save Profile"}
+</button>
+
+            {message ? (
+              <p className="text-sm text-slate-300">{message}</p>
+            ) : null}
+          </div>
+        </div>
+      </div>
     </main>
   );
 }

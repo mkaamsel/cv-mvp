@@ -53,10 +53,7 @@ export default function SignupPage() {
           style={{ padding: "0.75rem" }}
         />
 
-        <button
-          type="submit"
-          style={{ padding: "0.75rem", cursor: "pointer" }}
-        >
+        <button type="submit" style={{ padding: "0.75rem", cursor: "pointer" }}>
           Create account
         </button>
       </form>

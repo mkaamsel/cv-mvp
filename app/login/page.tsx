@@ -57,10 +57,7 @@ export default function LoginPage() {
           style={{ padding: "0.75rem" }}
         />
 
-        <button
-          type="submit"
-          style={{ padding: "0.75rem", cursor: "pointer" }}
-        >
+        <button type="submit" style={{ padding: "0.75rem", cursor: "pointer" }}>
           Login
         </button>
       </form>

@@ -4,37 +4,16 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
-type LetterRecord = {
+type CoverLetterRecord = {
   id: string;
   content: string;
   created_at: string;
 };
 
-const buttonStyle: React.CSSProperties = {
-  padding: "0.75rem 1rem",
-  cursor: "pointer",
-  border: "1px solid #ccc",
-  borderRadius: "10px",
-  background: "#f8f8f8",
-};
-
-const dangerButtonStyle: React.CSSProperties = {
-  ...buttonStyle,
-  border: "1px solid #d6a5a5",
-};
-
-const textareaStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "0.85rem",
-  border: "1px solid #ccc",
-  borderRadius: "10px",
-  resize: "vertical",
-};
-
-export default function CoverLettersPage() {
+export default function CoverLetterListPage() {
   const supabase = createSupabaseBrowserClient();
 
-  const [letters, setLetters] = useState<LetterRecord[]>([]);
+  const [letters, setLetters] = useState<CoverLetterRecord[]>([]);
   const [message, setMessage] = useState("Loading...");
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -44,10 +23,9 @@ export default function CoverLettersPage() {
   const fetchLetters = async () => {
     const {
       data: { user },
-      error: userError,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
+    if (!user) {
       setMessage("You must be logged in.");
       return;
     }
@@ -59,12 +37,12 @@ export default function CoverLettersPage() {
       .order("created_at", { ascending: false });
 
     if (error) {
-      setMessage("Failed to load cover letter drafts.");
+      setMessage("Failed to load cover letters.");
       return;
     }
 
     setLetters(data || []);
-    setMessage(data && data.length > 0 ? "" : "No saved cover letter drafts yet.");
+    setMessage(data && data.length > 0 ? "" : "No saved cover letters yet.");
   };
 
   useEffect(() => {
@@ -73,14 +51,12 @@ export default function CoverLettersPage() {
 
   const handleCopy = async (text: string) => {
     await navigator.clipboard.writeText(text);
-    alert("Copied to clipboard!");
+    alert("Copied to clipboard.");
   };
 
   const handleChange = (id: string, value: string) => {
     setLetters((prev) =>
-      prev.map((letter) =>
-        letter.id === id ? { ...letter, content: value } : letter
-      )
+      prev.map((letter) => (letter.id === id ? { ...letter, content: value } : letter)),
     );
   };
 
@@ -115,10 +91,9 @@ export default function CoverLettersPage() {
 
     const {
       data: { user },
-      error: userError,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
+    if (!user) {
       setItemMessage((prev) => ({
         ...prev,
         [id]: "You must be logged in.",
@@ -152,7 +127,7 @@ export default function CoverLettersPage() {
   };
 
   const handleDelete = async (id: string) => {
-    const confirmed = window.confirm("Delete this cover letter draft?");
+    const confirmed = window.confirm("Delete this cover letter?");
     if (!confirmed) return;
 
     setDeletingId(id);
@@ -163,7 +138,7 @@ export default function CoverLettersPage() {
     if (error) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "Failed to delete cover letter draft.",
+        [id]: "Failed to delete cover letter.",
       }));
       setDeletingId(null);
       return;
@@ -172,115 +147,102 @@ export default function CoverLettersPage() {
     const updated = letters.filter((letter) => letter.id !== id);
     setLetters(updated);
     setDeletingId(null);
-    setMessage(updated.length > 0 ? "" : "No saved cover letter drafts yet.");
+    setMessage(updated.length > 0 ? "" : "No saved cover letters yet.");
   };
 
   return (
-    <main style={{ padding: "2rem", maxWidth: "1000px", margin: "0 auto" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "1rem",
-          flexWrap: "wrap",
-          marginBottom: "1.5rem",
-        }}
-      >
-        <div>
-          <h1 style={{ marginBottom: "0.5rem" }}>Cover Letter History</h1>
-          <p style={{ color: "#555", margin: 0 }}>
-            Review, edit, delete, version, or reuse parts of previously generated cover letter drafts.
+    <main className="mx-auto max-w-5xl px-6 py-10 text-white">
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-2xl">
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-teal-300">
+            Saved drafts
+          </p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white md:text-4xl">
+            My Saved Cover Letters
+          </h1>
+          <p className="mt-3 text-base leading-7 text-slate-300">
+            Review, edit, copy, delete, and create new versions of your generated cover
+            letters.
           </p>
         </div>
 
         <Link
           href="/dashboard"
-          style={{
-            ...buttonStyle,
-            textDecoration: "none",
-            color: "inherit",
-            display: "inline-block",
-          }}
+          className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10"
         >
           Back to Dashboard
         </Link>
       </div>
 
-      {message && <p>{message}</p>}
+      {message && (
+        <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm font-medium text-slate-200 backdrop-blur">
+          {message}
+        </div>
+      )}
 
-      {letters.map((letter) => (
-        <section
-          key={letter.id}
-          style={{
-            marginTop: "1rem",
-            padding: "1.25rem",
-            border: "1px solid #ddd",
-            borderRadius: "12px",
-            background: "#fff",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: "1rem",
-              flexWrap: "wrap",
-              marginBottom: "1rem",
-            }}
+      <div className="space-y-6">
+        {letters.map((letter) => (
+          <section
+            key={letter.id}
+            className="rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-2xl shadow-black/20"
           >
-            <p style={{ margin: 0 }}>
-              <strong>Created:</strong> {new Date(letter.created_at).toLocaleString()}
-            </p>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+              <p className="text-sm text-slate-300">
+                <span className="font-semibold text-slate-100">Created:</span>{" "}
+                {new Date(letter.created_at).toLocaleString()}
+              </p>
 
-            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-              <button onClick={() => handleCopy(letter.content)} style={buttonStyle}>
-                Copy Draft
-              </button>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => handleCopy(letter.content)}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10"
+                >
+                  Copy Cover Letter
+                </button>
 
-              <button
-                onClick={() => handleSave(letter.id, letter.content)}
-                style={buttonStyle}
-                disabled={savingId === letter.id}
-              >
-                {savingId === letter.id ? "Saving..." : "Save Changes"}
-              </button>
+                <button
+                  onClick={() => handleSave(letter.id, letter.content)}
+                  disabled={savingId === letter.id}
+                  className="rounded-xl bg-teal-400 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {savingId === letter.id ? "Saving..." : "Save Changes"}
+                </button>
 
-              <button
-                onClick={() => handleSaveAsNewVersion(letter.id, letter.content)}
-                style={buttonStyle}
-                disabled={creatingVersionId === letter.id}
-              >
-                {creatingVersionId === letter.id
-                  ? "Saving New Version..."
-                  : "Save as New Version"}
-              </button>
+                <button
+                  onClick={() => handleSaveAsNewVersion(letter.id, letter.content)}
+                  disabled={creatingVersionId === letter.id}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {creatingVersionId === letter.id
+                    ? "Saving New Version..."
+                    : "Save as New Version"}
+                </button>
 
-              <button
-                onClick={() => handleDelete(letter.id)}
-                style={dangerButtonStyle}
-                disabled={deletingId === letter.id}
-              >
-                {deletingId === letter.id ? "Deleting..." : "Delete"}
-              </button>
+                <button
+                  onClick={() => handleDelete(letter.id)}
+                  disabled={deletingId === letter.id}
+                  className="rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-2.5 text-sm font-medium text-red-200 transition hover:bg-red-400/20 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {deletingId === letter.id ? "Deleting..." : "Delete"}
+                </button>
+              </div>
             </div>
-          </div>
 
-          <textarea
-            value={letter.content}
-            onChange={(e) => handleChange(letter.id, e.target.value)}
-            rows={14}
-            style={textareaStyle}
-          />
+            <textarea
+              value={letter.content}
+              onChange={(e) => handleChange(letter.id, e.target.value)}
+              rows={16}
+              className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-white placeholder:text-slate-500 outline-none transition focus:border-teal-300"
+            />
 
-          {itemMessage[letter.id] && (
-            <p style={{ marginTop: "0.75rem", color: "#555" }}>
-              {itemMessage[letter.id]}
-            </p>
-          )}
-        </section>
-      ))}
+            {itemMessage[letter.id] && (
+              <p className="mt-3 text-sm font-medium text-slate-300">
+                {itemMessage[letter.id]}
+              </p>
+            )}
+          </section>
+        ))}
+      </div>
     </main>
   );
 }
