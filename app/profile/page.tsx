@@ -1,170 +1,224 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import mammoth from "mammoth";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import Link from "next/link";
+import { useMemo, useState } from "react";
 
-export default function ProfilePage() {
-  const supabase = createSupabaseBrowserClient();
+type Question = {
+  field: string;
+  question: string;
+};
 
-  const [cvText, setCvText] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+export default function ProfileOnboardingPage() {
+  const [cvTexts, setCvTexts] = useState<string[]>([""]);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [sessionId, setSessionId] = useState("");
+  const [profile, setProfile] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [consentChecked, setConsentChecked] = useState(false);
 
-  useEffect(() => {
-    const loadProfile = async () => {
-      try {
-        setLoading(true);
-        setMessage("");
+  const canStart = useMemo(() => {
+    const hasAtLeastOneCv = cvTexts.some((text) => text.trim().length > 0);
+    return hasAtLeastOneCv && consentChecked && !loading;
+  }, [cvTexts, consentChecked, loading]);
 
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
-
-        if (userError || !user) {
-          setMessage("You must be logged in to view your profile.");
-          setLoading(false);
-          return;
-        }
-
-        const { data, error } = await supabase
-          .from("profiles")
-          .select("cv_text")
-          .eq("id", user.id)
-          .maybeSingle();
-
-        if (error) {
-          console.error(error);
-          setMessage("Could not load profile.");
-        } else if (data?.cv_text) {
-          setCvText(data.cv_text);
-        }
-      } catch (err) {
-        console.error(err);
-        setMessage("Something went wrong while loading your profile.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadProfile();
-  }, [supabase]);
-
-  const handleCVUpload = async (file: File) => {
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-
-      const result = await mammoth.extractRawText({
-        arrayBuffer,
-      });
-
-      setCvText(result.value);
-      setMessage("CV text extracted. Review and save.");
-    } catch (err) {
-      console.error(err);
-      setMessage("Could not read the CV file.");
-    }
+  const updateCv = (index: number, value: string) => {
+    const next = [...cvTexts];
+    next[index] = value;
+    setCvTexts(next);
   };
 
-  const handleSave = async () => {
+  const addCvBox = () => {
+    if (cvTexts.length >= 3) return;
+    setCvTexts([...cvTexts, ""]);
+  };
+
+  const startOnboarding = async () => {
+    if (!consentChecked) {
+      setMessage(
+        "Please confirm that you agree to the processing of your personal data before continuing.",
+      );
+      return;
+    }
+
+    setLoading(true);
+    setMessage("");
+
     try {
-      setSaving(true);
-      setMessage("");
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        setMessage("You must be logged in to save your profile.");
-        return;
-      }
-
-      const { error } = await supabase.from("profiles").upsert({
-        id: user.id,
-        cv_text: cvText,
+      const res = await fetch("/api/profile-onboarding", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cvTexts }),
       });
 
-      if (error) {
-        console.error(error);
-        setMessage("Could not save profile.");
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMessage(data.error || "Something went wrong.");
         return;
       }
 
-      setMessage("Profile saved successfully.");
-    } catch (err) {
-      console.error(err);
-      setMessage("Something went wrong while saving.");
+      setSessionId(data.sessionId);
+      setQuestions(data.questions || []);
+      setProfile(data.profile);
+      setMessage(data.message || "");
+    } catch {
+      setMessage("Something went wrong while building your profile.");
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
-        <div className="mx-auto max-w-3xl">Loading profile...</div>
-      </main>
-    );
-  }
+  const completeOnboarding = async () => {
+    setLoading(true);
+    setMessage("");
+
+    try {
+      const res = await fetch("/api/profile-onboarding/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, answers }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMessage(data.error || "Something went wrong.");
+        return;
+      }
+
+      setProfile(data.profile);
+      setQuestions([]);
+      setMessage("Your canonical profile has been saved.");
+    } catch {
+      setMessage("Something went wrong while saving your profile.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
-      <div className="mx-auto max-w-3xl">
-        <h1 className="text-3xl font-semibold">Profile</h1>
-        <p className="mt-2 text-sm text-slate-300">
-          Save your master CV here. You can paste it manually or upload a DOCX file.
+    <main className="max-w-3xl mx-auto p-6 space-y-6">
+      <h1 className="text-2xl font-semibold">Create your canonical profile</h1>
+
+      <div className="space-y-3 rounded-xl border p-4 bg-white">
+        <p className="text-sm text-gray-700">
+          You can upload or paste up to 3 CVs. If you have more than 3, please
+          merge them into one document. Duplicates are removed automatically.
         </p>
 
-        <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
-          <div className="mt-4">
-            <label className="mb-2 block text-sm font-medium text-slate-200">
-              Upload CV (.docx)
-            </label>
+        <p className="text-sm text-gray-700">
+          If you do not want your direct personal information to be processed by
+          AI at this stage, you may replace it with placeholders such as{" "}
+          <span className="font-medium">Name Name</span>,{" "}
+          <span className="font-medium">Telefon Telefon</span>, or{" "}
+          <span className="font-medium">Email Email</span>. Plain text is
+          accepted.
+        </p>
 
-            <input
-              type="file"
-              accept=".docx"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleCVUpload(file);
-              }}
-              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white"
-            />
-          </div>
-
-          <div className="mt-6">
-            <label className="mb-2 block text-sm font-medium text-slate-200">
-              Master CV
-            </label>
-
-            <textarea
-              value={cvText}
-              onChange={(e) => setCvText(e.target.value)}
-              rows={18}
-              placeholder="Paste your master CV here..."
-              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder:text-slate-400"
-            />
-          </div>
-
-          <div className="mt-4 flex items-center gap-4">
-            <button
-  onClick={handleSave}
-  disabled={saving}
-  className="rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-500 disabled:text-slate-200"
->
-  {saving ? "Saving..." : "Save Profile"}
-</button>
-
-            {message ? (
-              <p className="text-sm text-slate-300">{message}</p>
-            ) : null}
-          </div>
-        </div>
+        <label className="flex items-start gap-3 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={consentChecked}
+            onChange={(e) => setConsentChecked(e.target.checked)}
+          />
+          <span>
+            By checking this box, I agree that my personal data may be processed
+            for profile creation and application-tailoring purposes. I have read
+            the{" "}
+            <Link
+              href="/gdpr-policy"
+              className="underline font-medium"
+              target="_blank"
+            >
+              GDPR / Privacy Policy
+            </Link>
+            .
+          </span>
+        </label>
       </div>
+
+      {cvTexts.map((text, index) => (
+        <textarea
+          key={index}
+          className="w-full min-h-40 border rounded-lg p-3"
+          placeholder={`Paste CV ${index + 1}`}
+          value={text}
+          onChange={(e) => updateCv(index, e.target.value)}
+        />
+      ))}
+
+      {cvTexts.length < 3 && (
+        <button
+          onClick={addCvBox}
+          className="border rounded-lg px-4 py-2"
+          type="button"
+        >
+          Add another CV
+        </button>
+      )}
+
+      <div>
+        <button
+          onClick={startOnboarding}
+          disabled={!canStart}
+          className={`rounded-lg px-4 py-2 border ${
+            !canStart ? "opacity-50 cursor-not-allowed" : ""
+          }`}
+          type="button"
+        >
+          {loading ? "Processing..." : "Build profile"}
+        </button>
+      </div>
+
+      {profile && (
+        <div className="border rounded-xl p-4 space-y-2">
+          <h2 className="font-semibold">Draft profile</h2>
+          <pre className="text-xs whitespace-pre-wrap">
+            {JSON.stringify(profile, null, 2)}
+          </pre>
+        </div>
+      )}
+
+      {questions.length > 0 && (
+        <div className="space-y-4 border rounded-xl p-4">
+          <h2 className="font-semibold">A few details are still missing</h2>
+
+          <p className="text-sm text-gray-600">
+            You may answer with real values or with placeholders such as{" "}
+            <span className="font-medium">Telefon Telefon</span> if you prefer
+            not to provide personal details yet.
+          </p>
+
+          {questions.map((q) => (
+            <div key={q.field} className="space-y-1">
+              <label className="block text-sm font-medium">{q.question}</label>
+              <input
+                type="text"
+                className="w-full border rounded-lg p-2"
+                placeholder={`Enter ${q.field.replaceAll("_", " ")}`}
+                value={answers[q.field] || ""}
+                onChange={(e) =>
+                  setAnswers((prev) => ({ ...prev, [q.field]: e.target.value }))
+                }
+              />
+            </div>
+          ))}
+
+          <button
+            onClick={completeOnboarding}
+            disabled={loading}
+            className="rounded-lg px-4 py-2 border"
+            type="button"
+          >
+            {loading ? "Saving..." : "Save canonical profile"}
+          </button>
+        </div>
+      )}
+
+      {message && <p className="text-sm">{message}</p>}
     </main>
   );
 }
