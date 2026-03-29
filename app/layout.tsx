@@ -1,21 +1,17 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
-import NavBar from "@/components/NavBar";
+import "@/lib/design/theme.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
   subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-sans",
 });
 
 export const metadata: Metadata = {
   title: "CV MVP",
-  description: "CV Tailoring App MVP",
+  description: "Calm, trustworthy AI job application companion",
 };
 
 export default function RootLayout({
@@ -25,10 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} min-h-full antialiased`}
-      >
-        <NavBar />
+      <body className={`${inter.variable} font-sans antialiased`}>
         {children}
       </body>
     </html>

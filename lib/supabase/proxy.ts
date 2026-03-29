@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-const protectedRoutes = ["/dashboard", "/profile", "/tailoring/new"];
+const protectedRoutes = ["/dashboard", "/profile", "/tailoring", "/tailoring/new"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -52,5 +52,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/profile", "/tailoring/new"],
+  matcher: ["/dashboard/:path*", "/profile", "/tailoring", "/tailoring/:path*"],
 };
