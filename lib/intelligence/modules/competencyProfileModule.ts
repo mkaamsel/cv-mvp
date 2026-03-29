@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { buildCompetencyProfilePrompt } from "@/lib/prompts/competencyProfilePrompt";
+import { safeParseJSON } from "@/lib/intelligence/core/safeParseJSON";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -20,7 +21,6 @@ export async function competencyProfileModule({
   candidateText,
   jobDescriptionText,
 }: CompetencyProfileModuleInput): Promise<CompetencyProfileOutput> {
-
   const prompt = buildCompetencyProfilePrompt({
     candidateText,
     jobDescriptionText,
@@ -31,5 +31,20 @@ export async function competencyProfileModule({
     input: prompt,
   });
 
-  return JSON.parse(response.output_text);
+  const parsed = safeParseJSON<CompetencyProfileOutput>(response.output_text);
+
+  if (!parsed) {
+    throw new Error("competencyProfileModule returned invalid JSON.");
+  }
+
+  return {
+    competencies: Array.isArray(parsed.competencies) ? parsed.competencies : [],
+    competencySummary:
+      typeof parsed.competencySummary === "string"
+        ? parsed.competencySummary
+        : "",
+    underEvidencedButRelevant: Array.isArray(parsed.underEvidencedButRelevant)
+      ? parsed.underEvidencedButRelevant
+      : [],
+  };
 }

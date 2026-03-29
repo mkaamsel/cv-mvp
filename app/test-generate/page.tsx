@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 type ReviewFinding = {
@@ -89,6 +90,9 @@ type PositioningBriefOutput = {
 
 type GenerateResponse = {
   ok: boolean;
+  status?: "success" | "partial" | "failed";
+  warnings?: string[];
+  runId?: string;
   mode: "fast" | "reviewed";
   outputLanguage: "English" | "German";
   intelligence?: {
@@ -96,10 +100,10 @@ type GenerateResponse = {
     selectedEvidence?: SelectedEvidenceOutput;
     positioningBrief?: PositioningBriefOutput;
   };
-  draft: {
-    cvDraft: string;
-    coverLetterDraft: string;
-    generationNotes: string[];
+  draft?: {
+    cvDraft?: string;
+    coverLetterDraft?: string;
+    generationNotes?: string[];
   };
   review: ReviewOutput | null;
   error?: string;
@@ -124,6 +128,22 @@ function competencyBand(weight: number) {
   if (weight >= 6) return "Established";
   if (weight >= 3) return "Supporting";
   return "Light signal";
+}
+
+function statusClass(status?: "success" | "partial" | "failed") {
+  if (status === "success") {
+    return "bg-green-100 text-green-800";
+  }
+
+  if (status === "partial") {
+    return "bg-yellow-100 text-yellow-800";
+  }
+
+  if (status === "failed") {
+    return "bg-red-100 text-red-800";
+  }
+
+  return "bg-neutral-200 text-neutral-700";
 }
 
 export default function TestGeneratePage() {
@@ -157,17 +177,17 @@ export default function TestGeneratePage() {
 
       const data: GenerateResponse | { error: string } = await response.json();
 
-if (!response.ok) {
-  const message =
-    typeof data === "object" &&
-    data !== null &&
-    "error" in data &&
-    typeof data.error === "string"
-      ? data.error
-      : "Something went wrong.";
+      if (!response.ok) {
+        const message =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : "Something went wrong.";
 
-  setError(message);
-  return;
+        setError(message);
+        return;
       }
 
       setResult(data as GenerateResponse);
@@ -187,13 +207,25 @@ if (!response.ok) {
   return (
     <main className="min-h-screen bg-white px-6 py-10 text-neutral-900">
       <div className="mx-auto max-w-7xl">
-        <h1 className="text-4xl font-semibold tracking-tight">
-          BMS Internal Test UI
-        </h1>
-        <p className="mt-3 text-lg text-neutral-600">
-          Paste CV text and Job Description text, then inspect competency mapping,
-          evidence selection, positioning logic, draft quality, and optional review output.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-semibold tracking-tight">
+              BMS Internal Test UI
+            </h1>
+            <p className="mt-3 text-lg text-neutral-600">
+              Paste CV text and Job Description text, then inspect competency
+              mapping, evidence selection, positioning logic, draft quality, and
+              optional review output.
+            </p>
+          </div>
+
+          <Link
+            href="/debug"
+            className="rounded-2xl border border-neutral-300 px-5 py-3 text-sm font-medium text-neutral-800 transition hover:bg-neutral-50"
+          >
+            Open Debug Runs
+          </Link>
+        </div>
 
         <div className="mt-8 flex gap-3">
           <button
@@ -232,7 +264,9 @@ if (!response.ok) {
           </section>
 
           <section className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-2xl font-semibold">Job Description Text</h2>
+            <h2 className="mb-4 text-2xl font-semibold">
+              Job Description Text
+            </h2>
             <textarea
               value={jobText}
               onChange={(e) => setJobText(e.target.value)}
@@ -275,23 +309,71 @@ if (!response.ok) {
             <section className="rounded-3xl border border-neutral-200 bg-neutral-50 p-6">
               <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-2xl font-semibold">Run Summary</h2>
-                <span className="rounded-full bg-neutral-200 px-3 py-1 text-sm font-medium text-neutral-700">
-                  Mode: {result.mode === "fast" ? "Fast Draft" : "Generate + Review"}
+
+                <span
+                  className={`rounded-full px-3 py-1 text-sm font-medium ${statusClass(
+                    result.status
+                  )}`}
+                >
+                  Status: {result.status ?? "unknown"}
                 </span>
+
+                <span className="rounded-full bg-neutral-200 px-3 py-1 text-sm font-medium text-neutral-700">
+                  Mode:{" "}
+                  {result.mode === "fast" ? "Fast Draft" : "Generate + Review"}
+                </span>
+
                 <span className="rounded-full bg-neutral-200 px-3 py-1 text-sm font-medium text-neutral-700">
                   Output: {result.outputLanguage}
                 </span>
+
                 <span className="rounded-full bg-neutral-200 px-3 py-1 text-sm font-medium text-neutral-700">
                   Competencies: {competencyProfile?.competencies?.length ?? 0}
                 </span>
+
                 <span className="rounded-full bg-neutral-200 px-3 py-1 text-sm font-medium text-neutral-700">
-                  Evidence Items: {selectedEvidence?.selectedEvidence?.length ?? 0}
+                  Evidence Items:{" "}
+                  {selectedEvidence?.selectedEvidence?.length ?? 0}
                 </span>
               </div>
 
-              <div className="mt-4">
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <div className="rounded-2xl bg-white p-4">
+                  <h3 className="text-lg font-semibold">Run ID</h3>
+                  <p className="mt-2 break-all font-mono text-sm text-neutral-700">
+                    {result.runId ?? "Not returned"}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-white p-4">
+                  <h3 className="text-lg font-semibold">Debug Link</h3>
+                  {result.runId ? (
+                    <div className="mt-2">
+                      <Link
+                        href={`/debug/runs/${result.runId}`}
+                        className="inline-flex rounded-xl border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-800 transition hover:bg-neutral-50"
+                      >
+                        Open This Run
+                      </Link>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm text-neutral-500">
+                      No run ID available.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6">
+                <h3 className="text-lg font-semibold">Warnings</h3>
+                <div className="mt-2">{renderList(result.warnings)}</div>
+              </div>
+
+              <div className="mt-6">
                 <h3 className="text-lg font-semibold">Generation Notes</h3>
-                <div className="mt-2">{renderList(result.draft.generationNotes)}</div>
+                <div className="mt-2">
+                  {renderList(result.draft?.generationNotes)}
+                </div>
               </div>
             </section>
 
@@ -302,12 +384,16 @@ if (!response.ok) {
                   {competencyProfile.competencySummary}
                 </p>
 
-                <h3 className="mt-6 text-lg font-semibold">Under-evidenced but relevant</h3>
+                <h3 className="mt-6 text-lg font-semibold">
+                  Under-evidenced but relevant
+                </h3>
                 <div className="mt-2">
                   {renderList(competencyProfile.underEvidencedButRelevant)}
                 </div>
 
-                <h3 className="mt-6 text-lg font-semibold">Weighted Competencies</h3>
+                <h3 className="mt-6 text-lg font-semibold">
+                  Weighted Competencies
+                </h3>
                 <div className="mt-4 space-y-4">
                   {competencyProfile.competencies.map((item, index) => (
                     <div
@@ -332,10 +418,12 @@ if (!response.ok) {
                         {item.name}
                       </p>
                       <p className="mt-2 text-sm text-neutral-700">
-                        <span className="font-medium">Reasoning:</span> {item.reasoning}
+                        <span className="font-medium">Reasoning:</span>{" "}
+                        {item.reasoning}
                       </p>
                       <p className="mt-2 text-sm text-neutral-700">
-                        <span className="font-medium">Source support:</span> {item.sourceSupport}
+                        <span className="font-medium">Source support:</span>{" "}
+                        {item.sourceSupport}
                       </p>
                     </div>
                   ))}
@@ -345,15 +433,21 @@ if (!response.ok) {
 
             {selectedEvidence ? (
               <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
-                <h2 className="text-2xl font-semibold">Selected Evidence Summary</h2>
+                <h2 className="text-2xl font-semibold">
+                  Selected Evidence Summary
+                </h2>
                 <p className="mt-4 text-sm leading-6 text-neutral-800">
                   {selectedEvidence.evidenceSummary}
                 </p>
 
                 <h3 className="mt-6 text-lg font-semibold">Evidence Gaps</h3>
-                <div className="mt-2">{renderList(selectedEvidence.evidenceGaps)}</div>
+                <div className="mt-2">
+                  {renderList(selectedEvidence.evidenceGaps)}
+                </div>
 
-                <h3 className="mt-6 text-lg font-semibold">Selected Evidence Items</h3>
+                <h3 className="mt-6 text-lg font-semibold">
+                  Selected Evidence Items
+                </h3>
                 <div className="mt-4 space-y-4">
                   {selectedEvidence.selectedEvidence.map((item, index) => (
                     <div
@@ -400,7 +494,9 @@ if (!response.ok) {
 
                 <div className="mt-6">
                   <h3 className="text-lg font-semibold">Core Why Fit</h3>
-                  <div className="mt-2">{renderList(positioningBrief.coreWhyFit)}</div>
+                  <div className="mt-2">
+                    {renderList(positioningBrief.coreWhyFit)}
+                  </div>
                 </div>
 
                 <div className="mt-6">
@@ -426,7 +522,9 @@ if (!response.ok) {
 
                 <div className="mt-6">
                   <h3 className="text-lg font-semibold">CV Emphasis</h3>
-                  <div className="mt-2">{renderList(positioningBrief.cvEmphasis)}</div>
+                  <div className="mt-2">
+                    {renderList(positioningBrief.cvEmphasis)}
+                  </div>
                 </div>
               </section>
             ) : null}
@@ -434,14 +532,14 @@ if (!response.ok) {
             <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
               <h2 className="text-2xl font-semibold">Draft CV</h2>
               <pre className="mt-4 whitespace-pre-wrap rounded-2xl bg-neutral-50 p-4 text-sm leading-6 text-neutral-800">
-                {result.draft.cvDraft}
+                {result.draft?.cvDraft ?? ""}
               </pre>
             </section>
 
             <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
               <h2 className="text-2xl font-semibold">Draft Cover Letter</h2>
               <pre className="mt-4 whitespace-pre-wrap rounded-2xl bg-neutral-50 p-4 text-sm leading-6 text-neutral-800">
-                {result.draft.coverLetterDraft}
+                {result.draft?.coverLetterDraft ?? ""}
               </pre>
             </section>
 
@@ -489,14 +587,18 @@ if (!response.ok) {
                 </section>
 
                 <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
-                  <h2 className="text-2xl font-semibold">Final Cover Letter</h2>
+                  <h2 className="text-2xl font-semibold">
+                    Final Cover Letter
+                  </h2>
                   <pre className="mt-4 whitespace-pre-wrap rounded-2xl bg-neutral-50 p-4 text-sm leading-6 text-neutral-800">
                     {result.review.finalCoverLetter}
                   </pre>
                 </section>
 
                 <section className="rounded-3xl border border-neutral-200 bg-white p-6 shadow-sm">
-                  <h2 className="text-2xl font-semibold">Profile Discovery Signals</h2>
+                  <h2 className="text-2xl font-semibold">
+                    Profile Discovery Signals
+                  </h2>
                   <div className="mt-4">
                     {renderList(result.review.profileDiscoverySignals)}
                   </div>
