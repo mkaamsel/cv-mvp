@@ -23,6 +23,15 @@ type InputDocument = {
   description?: string;
 };
 
+type DraftSource = {
+  id: string | null;
+  fileName: string;
+  kind: SourceKind;
+  text: string;
+  description: string;
+  isStored: boolean;
+};
+
 type CandidateRole = {
   title: string;
   company: string | null;
@@ -148,13 +157,25 @@ type LoadWorkspaceResponse =
       error: string;
     };
 
+type ExtractDocxResponse =
+  | {
+      ok: true;
+      text: string;
+      fileName: string;
+      warnings: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 const KIND_LABELS: Record<SourceKind, string> = {
   primary_cv: "Primary CV",
   additional_cv: "Additional CV",
   arbeitszeugnis: "Arbeitszeugnis",
   certificate: "Certificate",
   user_note: "User note",
-  other: "Other",
+  other: "Other / Misc",
 };
 
 const CANDIDATE_PROFILE_STORAGE_KEY = "cvmvp_candidate_profile";
@@ -166,38 +187,33 @@ export default function ProfilePage(): React.JSX.Element {
   const saveTimerRef = useRef<number | null>(null);
   const hasLoadedWorkspaceRef = useRef(false);
   const isHydratingWorkspaceRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [locale, setLocale] = useState<"en" | "de">("en");
-  const [documents, setDocuments] = useState<InputDocument[]>([
-    createDocument("primary_cv", 1),
-  ]);
-
+  const [documents, setDocuments] = useState<InputDocument[]>([]);
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
+  const [draftSource, setDraftSource] = useState<DraftSource>(createEmptyDraft("primary_cv"));
+  const [selectedStoredDocumentId, setSelectedStoredDocumentId] = useState<string | null>(null);
+
   const [messages, setMessages] = useState<ChatMessage[]>([
     createAssistantMessage(
       "status",
-      "Welcome. I’ll help you build a strong candidate profile from your CV and supporting documents."
+      "Welcome. Build the candidate truth layer from source documents first, then move to job analysis."
     ),
     createAssistantMessage(
       "neutral",
-      "Start by pasting your primary CV text. You can add extra documents later."
+      "Paste source text or upload a Word CV, save it into Stored Documents, then rebuild the canonical profile."
     ),
   ]);
 
   const [pendingPrompts, setPendingPrompts] = useState<ActivePrompt[]>([]);
   const [activePrompt, setActivePrompt] = useState<ActivePrompt | null>(null);
-  const [answeredPromptCount, setAnsweredPromptCount] = useState(0);
-
   const [replyText, setReplyText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isSavingSource, setIsSavingSource] = useState(false);
   const [isChatting, setIsChatting] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [showDocuments, setShowDocuments] = useState(true);
-  const [hasShownReadyHint, setHasShownReadyHint] = useState(false);
-  const [lastSuggestedAction, setLastSuggestedAction] =
-    useState<SuggestedAction>("no_action");
-  const [isRedirecting, setIsRedirecting] = useState(false);
+  const [isUploadingDocx, setIsUploadingDocx] = useState(false);
   const [workspaceStatus, setWorkspaceStatus] = useState("Loading workspace...");
   const [workspaceLoadedAt, setWorkspaceLoadedAt] = useState<string | null>(null);
 
@@ -205,118 +221,35 @@ export default function ProfilePage(): React.JSX.Element {
     return documents.filter((doc) => doc.text.trim().length > 0);
   }, [documents]);
 
-  const supportDocuments = useMemo(() => {
-    return validDocuments.filter((doc) =>
-      ["additional_cv", "arbeitszeugnis", "certificate", "other"].includes(doc.kind)
-    );
-  }, [validDocuments]);
+  const readinessLabel = useMemo(() => {
+    if (!profile) return validDocuments.length > 0 ? "Building" : "Early";
+    if (profile.roles.length >= 2 && profile.verifiedClaims.length >= 2) return "Strong";
+    if (profile.roles.length >= 1) return "Building";
+    return "Early";
+  }, [profile, validDocuments.length]);
 
   useEffect(() => {
     void loadWorkspace();
   }, []);
 
   useEffect(() => {
-    if (
-      !profile &&
-      !hasShownReadyHint &&
-      validDocuments.some((doc) => doc.kind === "primary_cv")
-    ) {
-      appendMessage(
-        createAssistantMessage(
-          "status",
-          "I can see source text now. Press Build profile when you’re ready."
-        )
-      );
-      setHasShownReadyHint(true);
+    if (!hasLoadedWorkspaceRef.current) return;
+    if (isHydratingWorkspaceRef.current) return;
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
     }
-  }, [profile, hasShownReadyHint, validDocuments]);
 
-  const profileCompleteness = useMemo(() => {
-    if (!profile) return 0;
+    saveTimerRef.current = window.setTimeout(() => {
+      void persistWorkspace();
+    }, 700);
 
-    let score = 0;
-    if (profile.fullName) score += 0.08;
-    if (profile.headline) score += 0.08;
-    if (profile.summary) score += 0.12;
-    if (profile.roles.length > 0) score += 0.24;
-    if (profile.roles.some((role) => role.achievements.length > 0)) score += 0.12;
-    if (profile.coreSkills.length > 0) score += 0.1;
-    if (profile.tools.length > 0 || profile.standards.length > 0) score += 0.08;
-    if (profile.education.length > 0) score += 0.08;
-    if (profile.certifications.length > 0) score += 0.05;
-    if (profile.languages.length > 0) score += 0.03;
-    if (answeredPromptCount > 0) score += Math.min(answeredPromptCount * 0.03, 0.12);
-
-    return clamp(score, 0, 1);
-  }, [profile, answeredPromptCount]);
-
-  const corroboratedInfo = useMemo(() => {
-    if (!profile) return 0;
-
-    let score = 0;
-    if (supportDocuments.length >= 1) score += 0.35;
-    if (supportDocuments.length >= 2) score += 0.2;
-    if (validDocuments.some((doc) => doc.kind === "arbeitszeugnis")) score += 0.15;
-    if (validDocuments.some((doc) => doc.kind === "certificate")) score += 0.15;
-    if (validDocuments.length >= 3) score += 0.1;
-
-    return clamp(score, 0, 1);
-  }, [profile, supportDocuments, validDocuments]);
-
-  const moreInfoRequired = useMemo(() => {
-    if (!profile) return 1;
-
-    const raw = Math.min(pendingPrompts.length + profile.openQuestions.length, 8);
-    return clamp(raw / 8, 0, 1);
-  }, [profile, pendingPrompts]);
-
-  const readinessLabel = useMemo(() => {
-    if (!profile) return "Early";
-    if (profileCompleteness >= 0.82 && moreInfoRequired <= 0.2) return "Ready";
-    if (profileCompleteness >= 0.6) return "Strong";
-    if (profileCompleteness >= 0.35) return "Building";
-    return "Early";
-  }, [profile, profileCompleteness, moreInfoRequired]);
-
-  const includedSourceSummary = useMemo(() => {
-    return documents
-      .filter((doc) => doc.text.trim())
-      .map((doc) => doc.fileName);
-  }, [documents]);
-
-  const suggestedActionLabel = useMemo(() => {
-    switch (lastSuggestedAction) {
-      case "add_manual_summary":
-        return "Add manual summary";
-      case "paste_into_primary_cv":
-        return "Paste into Primary CV";
-      case "add_user_note":
-        return "Add user note";
-      case "click_build_profile":
-        return "Build profile";
-      case "answer_active_prompt":
-        return "Answer current question";
-      default:
-        return null;
-    }
-  }, [lastSuggestedAction]);
-
-  const manualSummaryTemplate = useMemo(() => {
-    return [
-      "Manual candidate summary",
-      "",
-      "Full name:",
-      "Target role:",
-      "Main employers:",
-      "Date ranges if known:",
-      "Main accounting responsibilities:",
-      "Systems and tools:",
-      "Standards (HGB / IFRS / US GAAP):",
-      "Qualifications / certifications:",
-      "Languages:",
-      "Any notable achievements:",
-    ].join("\n");
-  }, []);
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+    };
+  }, [documents, profile, locale]);
 
   async function loadWorkspace(): Promise<void> {
     try {
@@ -336,32 +269,29 @@ export default function ProfilePage(): React.JSX.Element {
 
       if (!data.workspace) {
         hasLoadedWorkspaceRef.current = true;
+        setDocuments([]);
+        setDraftSource(createEmptyDraft("primary_cv"));
         setWorkspaceStatus("No saved workspace yet.");
         return;
       }
 
-      const savedDocuments =
-        data.workspace.documents.length > 0
-          ? data.workspace.documents.map((doc, index) => ({
-              id: createId(),
-              fileName:
-                typeof doc.fileName === "string" && doc.fileName.trim()
-                  ? doc.fileName
-                  : autoFileNameForKind(doc.kind, index + 1),
-              kind: doc.kind,
-              text: doc.text ?? "",
-              description: doc.description ?? "",
-              isPrimary: Boolean(doc.isPrimary ?? doc.kind === "primary_cv"),
-            }))
-          : [createDocument("primary_cv", 1)];
+      const savedDocuments = data.workspace.documents.map((doc, index) => ({
+        id: createId(),
+        fileName:
+          typeof doc.fileName === "string" && doc.fileName.trim()
+            ? doc.fileName
+            : autoFileNameForKind(doc.kind, index + 1),
+        kind: doc.kind,
+        text: doc.text ?? "",
+        description: doc.description ?? "",
+        isPrimary: Boolean(doc.isPrimary ?? doc.kind === "primary_cv"),
+      }));
 
       setDocuments(savedDocuments);
+      setProfile(data.workspace.profile ?? null);
 
       if (data.workspace.profile) {
-        const savedProfile = data.workspace.profile;
-        setProfile(savedProfile);
-
-        const prompts = buildPromptsFromProfile(savedProfile);
+        const prompts = buildPromptsFromProfile(data.workspace.profile);
         setPendingPrompts(prompts);
         setActivePrompt(prompts[0] ?? null);
       }
@@ -379,66 +309,26 @@ export default function ProfilePage(): React.JSX.Element {
         setWorkspaceLoadedAt(data.workspace.updatedAt);
       }
 
-      appendMessage(
-        createAssistantMessage(
-          "status",
-          data.workspace.profile
-            ? "Your saved candidate workspace has been loaded."
-            : "Your saved source documents have been loaded."
-        )
-      );
-
-      setHasShownReadyHint(savedDocuments.some((doc) => doc.kind === "primary_cv"));
-      hasLoadedWorkspaceRef.current = true;
+      setDraftSource(createEmptyDraft(savedDocuments[0]?.kind ?? "primary_cv"));
       setWorkspaceStatus(
         data.workspace.updatedAt
           ? `Workspace loaded · ${new Date(data.workspace.updatedAt).toLocaleString()}`
           : "Workspace loaded"
       );
+      hasLoadedWorkspaceRef.current = true;
     } catch (caughtError) {
       const message =
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Could not load saved workspace.";
-
-      hasLoadedWorkspaceRef.current = true;
+        caughtError instanceof Error ? caughtError.message : "Could not load saved workspace.";
       setWorkspaceStatus("Workspace load failed.");
       appendMessage(createAssistantMessage("error", message));
+      hasLoadedWorkspaceRef.current = true;
     } finally {
       isHydratingWorkspaceRef.current = false;
     }
   }
 
-  useEffect(() => {
-    if (!hasLoadedWorkspaceRef.current) return;
-    if (isHydratingWorkspaceRef.current) return;
-    if (isRedirecting) return;
-
-    if (saveTimerRef.current) {
-      window.clearTimeout(saveTimerRef.current);
-    }
-
-    saveTimerRef.current = window.setTimeout(() => {
-      void persistWorkspace();
-    }, 700);
-
-    return () => {
-      if (saveTimerRef.current) {
-        window.clearTimeout(saveTimerRef.current);
-      }
-    };
-  }, [documents, profile, locale, readinessLabel]);
-
   async function persistWorkspace(): Promise<void> {
     try {
-      const serializableDocuments = documents.map((doc) => ({
-        fileName: doc.fileName,
-        kind: doc.kind,
-        text: doc.text,
-        description: doc.description ?? "",
-        isPrimary: Boolean(doc.isPrimary),
-      }));
-
       const response = await fetch("/api/profile/save", {
         method: "POST",
         headers: {
@@ -446,7 +336,13 @@ export default function ProfilePage(): React.JSX.Element {
         },
         body: JSON.stringify({
           profile,
-          documents: serializableDocuments,
+          documents: documents.map((doc) => ({
+            fileName: doc.fileName,
+            kind: doc.kind,
+            text: doc.text,
+            description: doc.description ?? "",
+            isPrimary: Boolean(doc.isPrimary),
+          })),
           meta: {
             locale,
             sourceCount: validDocuments.length,
@@ -479,173 +375,161 @@ export default function ProfilePage(): React.JSX.Element {
     setMessages((prev) => [...prev, message]);
   }
 
-  function addDocument(kind: SourceKind): void {
-    const count = documents.filter((doc) => doc.kind === kind).length + 1;
-    setDocuments((prev) => [...prev, createDocument(kind, count)]);
+  function createNewDraft(kind: SourceKind): void {
+    setSelectedStoredDocumentId(null);
+    setDraftSource(createEmptyDraft(kind));
+    setError(null);
   }
 
-  function addUserNote(text: string): void {
-    setDocuments((prev) => {
-      const noteCount = prev.filter((doc) => doc.kind === "user_note").length + 1;
+  function handleStoredDocumentSelect(docId: string): void {
+    const doc = documents.find((item) => item.id === docId);
+    if (!doc) return;
 
-      return [
-        ...prev,
-        {
-          id: createId(),
-          kind: "user_note",
-          fileName: autoFileNameForKind("user_note", noteCount),
-          text,
-          isPrimary: false,
-          description: "",
-        },
-      ];
+    setSelectedStoredDocumentId(docId);
+    setDraftSource({
+      id: doc.id,
+      fileName: doc.fileName,
+      kind: doc.kind,
+      text: doc.text,
+      description: doc.description ?? "",
+      isStored: true,
     });
+    setError(null);
   }
 
-  function ensurePrimaryCvWithText(prefillText: string): void {
-    setDocuments((prev) => {
-      const primaryIndex = prev.findIndex((doc) => doc.kind === "primary_cv");
+  async function handleDocxUpload(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
-      if (primaryIndex >= 0) {
-        const next = [...prev];
-        const current = next[primaryIndex];
-        next[primaryIndex] = {
-          ...current,
-          text: current.text.trim() ? current.text : prefillText,
-        };
-        return next;
+    setIsUploadingDocx(true);
+    setError(null);
+
+    try {
+      if (!file.name.toLowerCase().endsWith(".docx")) {
+        throw new Error("Please upload a .docx file.");
       }
 
-      return [
-        {
-          id: createId(),
-          kind: "primary_cv",
-          fileName: "Primary CV",
-          text: prefillText,
-          isPrimary: true,
-          description: "",
-        },
-        ...prev,
-      ];
-    });
-  }
+      const formData = new FormData();
+      formData.append("file", file);
 
-  function handleSuggestedAction(): void {
-    switch (lastSuggestedAction) {
-      case "add_manual_summary":
-        addUserNote(manualSummaryTemplate);
-        setShowDocuments(true);
+      const response = await fetch("/api/profile/extract-docx", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = (await response.json()) as ExtractDocxResponse;
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.ok ? "DOCX extraction failed." : data.error);
+      }
+
+      setSelectedStoredDocumentId(null);
+      setDraftSource({
+        id: null,
+        fileName: stripDocxExtension(data.fileName) || "Uploaded CV",
+        kind: "primary_cv",
+        text: data.text,
+        description: "",
+        isStored: false,
+      });
+
+      appendMessage(
+        createAssistantMessage(
+          "success",
+          `DOCX extracted successfully from ${data.fileName}. Review the text in Incoming Source Text, then save it to Stored Documents.`
+        )
+      );
+
+      if (data.warnings.length > 0) {
         appendMessage(
           createAssistantMessage(
             "status",
-            "I added a manual summary note template to your source documents. Fill it in with whatever you know for now."
+            `DOCX extraction notes: ${data.warnings.join(" | ")}`
           )
         );
-        break;
-
-      case "paste_into_primary_cv":
-        ensurePrimaryCvWithText("");
-        setShowDocuments(true);
-        appendMessage(
-          createAssistantMessage(
-            "status",
-            "Use the Primary CV source box below for your main CV text."
-          )
-        );
-        break;
-
-      case "add_user_note":
-        addUserNote("");
-        setShowDocuments(true);
-        appendMessage(
-          createAssistantMessage(
-            "status",
-            "I added a blank user note to your source documents."
-          )
-        );
-        break;
-
-      case "click_build_profile":
-        void handleBuildProfile();
-        break;
-
-      case "answer_active_prompt":
-      case "no_action":
-      default:
-        break;
+      }
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "DOCX upload failed.";
+      setError(message);
+      appendMessage(createAssistantMessage("error", message));
+    } finally {
+      setIsUploadingDocx(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   }
 
-  function updateDocument(
-    id: string,
-    patch: Partial<Pick<InputDocument, "kind" | "text" | "description">>
-  ): void {
-    setDocuments((prev) =>
-      prev.map((doc) => {
-        if (doc.id !== id) return doc;
+  async function handleSaveSource(): Promise<void> {
+    if (!draftSource.text.trim()) {
+      setError("Please paste or upload some source text before saving.");
+      return;
+    }
 
-        const nextKind = patch.kind ?? doc.kind;
-        const nextCount =
-          prev.filter((item) => item.kind === nextKind && item.id !== id).length + 1;
+    setIsSavingSource(true);
+    setError(null);
 
-        return {
-          ...doc,
-          ...patch,
-          kind: nextKind,
-          fileName: autoFileNameForKind(nextKind, nextCount),
-          isPrimary: nextKind === "primary_cv",
-        };
-      })
-    );
+    try {
+      setDocuments((prev) => {
+        if (draftSource.id && prev.some((doc) => doc.id === draftSource.id)) {
+          return prev.map((doc) =>
+            doc.id === draftSource.id
+              ? {
+                  ...doc,
+                  fileName: draftSource.fileName.trim() || doc.fileName,
+                  kind: draftSource.kind,
+                  text: draftSource.text,
+                  description: draftSource.description.trim(),
+                  isPrimary: draftSource.kind === "primary_cv",
+                }
+              : doc
+          );
+        }
+
+        const nextCount = prev.filter((doc) => doc.kind === draftSource.kind).length + 1;
+        return [
+          ...prev,
+          {
+            id: createId(),
+            fileName:
+              draftSource.fileName.trim() || autoFileNameForKind(draftSource.kind, nextCount),
+            kind: draftSource.kind,
+            text: draftSource.text,
+            description: draftSource.description.trim(),
+            isPrimary: draftSource.kind === "primary_cv",
+          },
+        ];
+      });
+
+      appendMessage(
+        createAssistantMessage(
+          "success",
+          `${KIND_LABELS[draftSource.kind]} saved to Stored Documents. Rebuild profile when you want the canonical profile refreshed.`
+        )
+      );
+
+      setSelectedStoredDocumentId(null);
+      setDraftSource(createEmptyDraft("primary_cv"));
+    } finally {
+      setIsSavingSource(false);
+    }
   }
 
-  function persistProfileForTailoring(
-    nextProfile: CandidateProfile,
-    sourceDocs: InputDocument[],
-    localeValue: "en" | "de"
-  ): void {
-    if (typeof window === "undefined") return;
+  function removeStoredDocument(id: string): void {
+    setDocuments((prev) => prev.filter((doc) => doc.id !== id));
 
-    sessionStorage.setItem(CANDIDATE_PROFILE_STORAGE_KEY, JSON.stringify(nextProfile));
-
-    sessionStorage.setItem(
-      CANDIDATE_PROFILE_META_STORAGE_KEY,
-      JSON.stringify({
-        locale: localeValue,
-        storedAt: new Date().toISOString(),
-        sourceCount: sourceDocs.filter((doc) => doc.text.trim()).length,
-        readinessLabel:
-          profileCompleteness >= 0.82 && moreInfoRequired <= 0.2
-            ? "Ready"
-            : profileCompleteness >= 0.6
-              ? "Strong"
-              : profileCompleteness >= 0.35
-                ? "Building"
-                : "Early",
-      })
-    );
-
-    sessionStorage.setItem(
-      CANDIDATE_DOCUMENTS_STORAGE_KEY,
-      JSON.stringify(
-        sourceDocs
-          .filter((doc) => doc.text.trim())
-          .map((doc) => ({
-            fileName: doc.fileName,
-            kind: doc.kind,
-            text: doc.text,
-            description: doc.description ?? "",
-            isPrimary: Boolean(doc.isPrimary),
-          }))
-      )
-    );
+    if (selectedStoredDocumentId === id) {
+      setSelectedStoredDocumentId(null);
+      setDraftSource(createEmptyDraft("primary_cv"));
+    }
   }
 
   async function handleBuildProfile(): Promise<void> {
     setError(null);
 
     if (!validDocuments.length) {
-      const message = "Please paste at least one source document first.";
+      const message = "Please save at least one source document first.";
       setError(message);
       appendMessage(createAssistantMessage("error", message));
       return;
@@ -654,7 +538,7 @@ export default function ProfilePage(): React.JSX.Element {
     appendMessage(
       createAssistantMessage(
         "status",
-        `I’m building your profile from ${validDocuments.length} source ${
+        `I’m rebuilding the canonical candidate profile from ${validDocuments.length} stored source ${
           validDocuments.length === 1 ? "document" : "documents"
         }.`
       )
@@ -684,58 +568,19 @@ export default function ProfilePage(): React.JSX.Element {
       const data = (await response.json()) as ExtractCandidateProfileResponse;
 
       if (!response.ok || !data.ok) {
-        const message = data.ok ? "Failed to build profile." : data.error;
-        throw new Error(message);
+        throw new Error(data.ok ? "Failed to build profile." : data.error);
       }
 
-      const nextProfile = data.profile;
-      setProfile(nextProfile);
-
-      const prompts = buildPromptsFromProfile(nextProfile);
+      setProfile(data.profile);
+      const prompts = buildPromptsFromProfile(data.profile);
       setPendingPrompts(prompts);
       setActivePrompt(prompts[0] ?? null);
-      setAnsweredPromptCount(0);
-      setShowDocuments(false);
-      setLastSuggestedAction("no_action");
-
-      persistProfileForTailoring(nextProfile, documents, locale);
-
-      await fetch("/api/profile/save", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          profile: nextProfile,
-          documents: documents.map((doc) => ({
-            fileName: doc.fileName,
-            kind: doc.kind,
-            text: doc.text,
-            description: doc.description ?? "",
-            isPrimary: Boolean(doc.isPrimary),
-          })),
-          meta: {
-            locale,
-            sourceCount: validDocuments.length,
-            readinessLabel,
-            lastBuiltAt: new Date().toISOString(),
-          },
-        }),
-      });
-
       appendMessage(
         createAssistantMessage(
           "success",
-          "Your candidate profile is ready. Redirecting you to tailoring now."
+          "Canonical candidate profile refreshed. Review it below, then move to job analysis when ready."
         )
       );
-
-      setWorkspaceStatus("Profile built and workspace saved.");
-      setIsRedirecting(true);
-
-      window.setTimeout(() => {
-        router.push("/tailoring");
-      }, 500);
     } catch (caughtError) {
       const message =
         caughtError instanceof Error
@@ -746,6 +591,16 @@ export default function ProfilePage(): React.JSX.Element {
     } finally {
       setIsExtracting(false);
     }
+  }
+
+  function handleGoToJobAnalysis(): void {
+    if (!profile) {
+      setError("Build the canonical profile first before moving to job analysis.");
+      return;
+    }
+
+    persistProfileForTailoring(profile, documents, locale, readinessLabel);
+    router.push("/workspace/job");
   }
 
   async function handleReplySubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
@@ -782,62 +637,45 @@ export default function ProfilePage(): React.JSX.Element {
       const data = (await response.json()) as ProfileChatResponse;
 
       if (!response.ok || !data.ok) {
-        const message = data.ok ? "Profile chat failed." : data.error;
-        throw new Error(message);
+        throw new Error(data.ok ? "Profile chat failed." : data.error);
       }
 
       appendMessage(createAssistantMessage("neutral", data.assistantMessage));
-      setLastSuggestedAction(data.suggestedAction ?? "no_action");
 
       if (data.shouldCaptureAsNote) {
-        captureReplyAsUserNote(trimmed, activePrompt?.text ?? null);
+        setDraftSource({
+          id: null,
+          fileName: autoFileNameForKind(
+            "user_note",
+            documents.filter((d) => d.kind === "user_note").length + 1
+          ),
+          kind: "user_note",
+          text: activePrompt ? `Prompt: ${activePrompt.text}\nAnswer: ${trimmed}` : trimmed,
+          description: "",
+          isStored: false,
+        });
+        setSelectedStoredDocumentId(null);
+
+        appendMessage(
+          createAssistantMessage(
+            "status",
+            "I prepared this reply as a user note in Incoming Source Text. Save it to Stored Documents when you want it committed to the system."
+          )
+        );
       }
 
       if (data.answeredActivePrompt && activePrompt) {
         const remaining = pendingPrompts.filter((item) => item.id !== activePrompt.id);
         setPendingPrompts(remaining);
         setActivePrompt(remaining[0] ?? null);
-        setAnsweredPromptCount((prev) => prev + 1);
-
-        if (remaining[0]) {
-          appendMessage(createAssistantMessage("question", remaining[0].text));
-        } else {
-          appendMessage(
-            createAssistantMessage(
-              "success",
-              "Good. There are no active follow-up questions left right now."
-            )
-          );
-        }
       }
     } catch (caughtError) {
       const message =
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unexpected chat error.";
-
+        caughtError instanceof Error ? caughtError.message : "Unexpected chat error.";
       appendMessage(createAssistantMessage("error", message));
     } finally {
       setIsChatting(false);
     }
-  }
-
-  function captureReplyAsUserNote(reply: string, promptText: string | null): void {
-    setDocuments((prev) => {
-      const noteCount = prev.filter((doc) => doc.kind === "user_note").length + 1;
-
-      return [
-        ...prev,
-        {
-          id: createId(),
-          kind: "user_note",
-          fileName: autoFileNameForKind("user_note", noteCount),
-          text: promptText ? `Prompt: ${promptText}\nAnswer: ${reply}` : reply,
-          isPrimary: false,
-          description: "",
-        },
-      ];
-    });
   }
 
   return (
@@ -852,153 +690,60 @@ export default function ProfilePage(): React.JSX.Element {
         style={{
           maxWidth: 1480,
           margin: "0 auto",
-          padding: "24px 20px 40px",
+          padding: "22px 20px 36px",
         }}
       >
-        <header
-          style={{
-            marginBottom: 20,
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-          }}
-        >
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              alignSelf: "flex-start",
-              padding: "6px 10px",
-              borderRadius: 999,
-              background: t.colors.primarySoft,
-              color: t.colors.textOnPrimary,
-              fontSize: 12,
-              fontWeight: 700,
-            }}
-          >
-            Candidate Profile Builder
-          </span>
-
-          <h1
-            style={{
-              margin: 0,
-              fontSize: 32,
-              lineHeight: 1.15,
-              fontWeight: 800,
-              color: t.colors.textPrimary,
-            }}
-          >
-            Build the candidate truth layer first
-          </h1>
-
-          <p
-            style={{
-              margin: 0,
-              maxWidth: 980,
-              color: t.colors.textSecondary,
-              fontSize: 15,
-              lineHeight: 1.55,
-            }}
-          >
-            This page helps the system understand the candidate properly before tailoring.
+        <header style={{ marginBottom: 16 }}>
+          <span style={eyebrowStyle}>Candidate Profile Builder</span>
+          <h1 style={titleStyle}>Build the canonical candidate profile</h1>
+          <p style={subtitleStyle}>
+            Paste source text or upload a Word CV, save it into Stored Documents,
+            then rebuild the canonical profile from stored evidence only.
           </p>
         </header>
 
-        <div
-          style={{
-            marginBottom: 18,
-            padding: 14,
-            borderRadius: t.radius.md,
-            background: t.colors.surface,
-            border: `1px solid ${t.colors.border}`,
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            gap: 12,
-            boxShadow: t.shadow.sm,
-          }}
-        >
+        <div style={topBarStyle}>
+          <StatusPill label={readinessLabel} tone={profile ? "green" : "blue"} />
           <StatusPill
-            label={
-              isRedirecting
-                ? "Redirecting to tailoring..."
-                : isExtracting
-                  ? "Building profile..."
-                  : "Ready"
-            }
-            tone={
-              isRedirecting ? "green" : isExtracting ? "amber" : profile ? "green" : "blue"
-            }
-          />
-          <StatusPill
-            label={`${validDocuments.length} source${validDocuments.length === 1 ? "" : "s"}`}
+            label={`${validDocuments.length} stored source${validDocuments.length === 1 ? "" : "s"}`}
             tone="blue"
           />
-          <StatusPill label={readinessLabel} tone={profile ? "green" : "amber"} />
           <StatusPill
             label={workspaceStatus}
             tone={workspaceStatus.toLowerCase().includes("failed") ? "amber" : "blue"}
           />
 
-          <div
-            style={{
-              marginLeft: "auto",
-              display: "flex",
-              gap: 8,
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
-          >
-            <label
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: t.colors.textSecondary,
-              }}
-            >
-              Output language
-            </label>
-
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
             <select
               value={locale}
               onChange={(event) => setLocale(event.target.value as "en" | "de")}
               style={selectStyle}
-              disabled={isExtracting || isRedirecting}
             >
               <option value="en">English</option>
               <option value="de">German</option>
             </select>
 
+            <button type="button" onClick={handleBuildProfile} style={buttonStyle}>
+              {isExtracting ? "Rebuilding..." : "Rebuild Profile"}
+            </button>
+
             <button
               type="button"
-              onClick={handleBuildProfile}
-              disabled={isExtracting || isRedirecting}
+              onClick={handleGoToJobAnalysis}
               style={{
                 ...buttonStyle,
-                background:
-                  isExtracting || isRedirecting ? t.colors.backgroundSoft : t.colors.primary,
-                color: t.colors.textOnPrimary,
-                cursor: isExtracting || isRedirecting ? "not-allowed" : "pointer",
-                opacity: isExtracting || isRedirecting ? 0.8 : 1,
+                background: t.colors.surface,
+                color: t.colors.textPrimary,
+                border: `1px solid ${t.colors.border}`,
               }}
             >
-              {isRedirecting
-                ? "Redirecting..."
-                : isExtracting
-                  ? "Building..."
-                  : "Build profile"}
+              Continue to Job
             </button>
           </div>
         </div>
 
         {workspaceLoadedAt ? (
-          <div
-            style={{
-              marginBottom: 18,
-              color: t.colors.textMuted,
-              fontSize: 12,
-            }}
-          >
+          <div style={{ marginBottom: 16, color: t.colors.textMuted, fontSize: 12 }}>
             Last workspace update: {new Date(workspaceLoadedAt).toLocaleString()}
           </div>
         ) : null}
@@ -1006,266 +751,121 @@ export default function ProfilePage(): React.JSX.Element {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1.35fr 0.9fr",
-            gap: 20,
+            gridTemplateColumns: "1.15fr 0.85fr",
+            gap: 18,
             alignItems: "start",
+            marginBottom: 18,
           }}
         >
-          <section
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 16,
-            }}
-          >
-            <Card>
-              <CardTitle
-                title="Conversation"
-                subtitle="This should feel like a guided conversation. I’ll ask one thing at a time."
-              />
+          <Card>
+            <CardTitle
+              title="Incoming Source Text"
+              subtitle="Paste new content here or upload a DOCX and review the extracted text before saving."
+            />
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+              {(
+                [
+                  "primary_cv",
+                  "additional_cv",
+                  "arbeitszeugnis",
+                  "certificate",
+                  "user_note",
+                  "other",
+                ] as SourceKind[]
+              ).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => createNewDraft(kind)}
+                  style={{
+                    ...buttonStyle,
+                    background:
+                      draftSource.kind === kind && !draftSource.isStored
+                        ? t.colors.primarySoft
+                        : t.colors.surface,
+                    color:
+                      draftSource.kind === kind && !draftSource.isStored
+                        ? t.colors.textOnPrimary
+                        : t.colors.textPrimary,
+                    border: `1px solid ${t.colors.border}`,
+                  }}
+                >
+                  New {KIND_LABELS[kind]}
+                </button>
+              ))}
+            </div>
+
+            <div style={editorShellStyle}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  flexWrap: "wrap",
+                  marginBottom: 12,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <input
+                    type="text"
+                    value={draftSource.fileName}
+                    onChange={(event) =>
+                      setDraftSource((prev) => ({ ...prev, fileName: event.target.value }))
+                    }
+                    placeholder="Document name"
+                    style={inputStyle}
+                  />
+                </div>
+
+                <select
+                  value={draftSource.kind}
+                  onChange={(event) =>
+                    setDraftSource((prev) => ({
+                      ...prev,
+                      kind: event.target.value as SourceKind,
+                    }))
+                  }
+                  style={selectStyle}
+                >
+                  <option value="primary_cv">Primary CV</option>
+                  <option value="additional_cv">Additional CV</option>
+                  <option value="arbeitszeugnis">Arbeitszeugnis</option>
+                  <option value="certificate">Certificate</option>
+                  <option value="user_note">User note</option>
+                  <option value="other">Other / Misc</option>
+                </select>
+              </div>
 
               <div
                 style={{
                   display: "flex",
-                  flexDirection: "column",
-                  gap: 12,
-                  maxHeight: 430,
-                  overflowY: "auto",
-                  paddingRight: 4,
-                }}
-              >
-                {messages.map((message) => (
-                  <MessageBubble key={message.id} message={message} />
-                ))}
-              </div>
-
-              {activePrompt && (
-                <div
-                  style={{
-                    marginTop: 16,
-                    borderRadius: t.radius.md,
-                    border: `1px solid ${t.colors.warning}`,
-                    background: t.colors.accentYellow,
-                    padding: 14,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 800,
-                      color: t.colors.textSecondary,
-                      marginBottom: 8,
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Current question
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 15,
-                      lineHeight: 1.55,
-                      color: t.colors.textPrimary,
-                    }}
-                  >
-                    {activePrompt.text}
-                  </div>
-                </div>
-              )}
-
-              {suggestedActionLabel && (
-                <div
-                  style={{
-                    marginTop: 16,
-                    borderRadius: t.radius.md,
-                    border: `1px solid ${t.colors.border}`,
-                    background: t.colors.backgroundSoft,
-                    padding: 14,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 800,
-                      color: t.colors.textSecondary,
-                      marginBottom: 8,
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Suggested next action
-                  </div>
-
-                  <div
-                    style={{
-                      fontSize: 14,
-                      lineHeight: 1.55,
-                      color: t.colors.textPrimary,
-                      marginBottom: lastSuggestedAction === "add_manual_summary" ? 10 : 0,
-                    }}
-                  >
-                    {renderSuggestedActionHelp(lastSuggestedAction)}
-                  </div>
-
-                  {lastSuggestedAction === "add_manual_summary" && (
-                    <textarea
-                      value={manualSummaryTemplate}
-                      readOnly
-                      rows={10}
-                      style={{
-                        ...textareaStyle,
-                        background: t.colors.surface,
-                        marginBottom: 10,
-                      }}
-                    />
-                  )}
-
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    {lastSuggestedAction !== "answer_active_prompt" &&
-                      lastSuggestedAction !== "no_action" && (
-                        <button
-                          type="button"
-                          onClick={handleSuggestedAction}
-                          style={buttonStyle}
-                        >
-                          {lastSuggestedAction === "click_build_profile"
-                            ? "Run action"
-                            : "Apply suggestion"}
-                        </button>
-                      )}
-
-                    {lastSuggestedAction === "add_manual_summary" && (
-                      <button
-                        type="button"
-                        onClick={() => navigator.clipboard.writeText(manualSummaryTemplate)}
-                        style={{
-                          ...buttonStyle,
-                          background: t.colors.surface,
-                          color: t.colors.textPrimary,
-                          border: `1px solid ${t.colors.border}`,
-                        }}
-                      >
-                        Copy template
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <form
-                onSubmit={handleReplySubmit}
-                style={{
-                  marginTop: 16,
-                  display: "flex",
-                  flexDirection: "column",
+                  justifyContent: "space-between",
                   gap: 10,
+                  flexWrap: "wrap",
+                  marginBottom: 12,
+                  padding: 12,
+                  borderRadius: t.radius.md,
+                  background: t.colors.backgroundSoft,
+                  border: `1px solid ${t.colors.borderSoft}`,
                 }}
               >
-                <textarea
-                  value={replyText}
-                  onChange={(event) => setReplyText(event.target.value)}
-                  rows={4}
-                  placeholder={
-                    activePrompt
-                      ? "Reply here in your own words..."
-                      : "You can ask a question or add extra profile detail here..."
-                  }
-                  style={textareaStyle}
-                  disabled={isRedirecting}
-                />
-
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 12,
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 12,
-                      color: t.colors.textMuted,
-                    }}
-                  >
-                    Answers here can also be captured as notes for later profile rebuilding.
-                  </span>
-
-                  <button
-                    type="submit"
-                    disabled={isChatting || isRedirecting}
-                    style={{
-                      ...buttonStyle,
-                      opacity: isChatting || isRedirecting ? 0.8 : 1,
-                      cursor: isChatting || isRedirecting ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    {isChatting ? "Sending..." : "Send reply"}
-                  </button>
+                <div style={{ fontSize: 13, color: t.colors.textSecondary, lineHeight: 1.5 }}>
+                  Upload a Word CV to auto-fill the editor, or paste text manually.
                 </div>
-              </form>
-            </Card>
 
-            <Card>
-              <CardTitle
-                title="Source documents"
-                subtitle="Paste extracted text for each source. Document cleanup can happen later in the document repository."
-              />
-
-              {profile && (
-                <div
-                  style={{
-                    marginBottom: 14,
-                    padding: 12,
-                    borderRadius: t.radius.md,
-                    background: t.colors.backgroundSoft,
-                    border: `1px solid ${t.colors.border}`,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 700,
-                      color: t.colors.textPrimary,
-                      marginBottom: 8,
-                    }}
-                  >
-                    Included sources
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 8,
-                      marginBottom: 10,
-                    }}
-                  >
-                    {includedSourceSummary.map((item, index) => (
-                      <span
-                        key={`${item}-${index}`}
-                        style={{
-                          display: "inline-flex",
-                          padding: "7px 10px",
-                          borderRadius: 999,
-                          background: t.colors.surface,
-                          border: `1px solid ${t.colors.borderSoft}`,
-                          fontSize: 12,
-                          color: t.colors.textPrimary,
-                        }}
-                      >
-                        {item}
-                      </span>
-                    ))}
-                  </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".docx"
+                    onChange={handleDocxUpload}
+                    style={{ display: "none" }}
+                  />
 
                   <button
                     type="button"
-                    onClick={() => setShowDocuments((prev) => !prev)}
+                    onClick={() => fileInputRef.current?.click()}
                     style={{
                       ...buttonStyle,
                       background: t.colors.surface,
@@ -1273,366 +873,394 @@ export default function ProfilePage(): React.JSX.Element {
                       border: `1px solid ${t.colors.border}`,
                     }}
                   >
-                    {showDocuments ? "Hide source documents" : "Show source documents"}
+                    {isUploadingDocx ? "Uploading DOCX..." : "Upload DOCX"}
                   </button>
                 </div>
+              </div>
+
+              {draftSource.kind === "other" && (
+                <input
+                  type="text"
+                  value={draftSource.description}
+                  onChange={(event) =>
+                    setDraftSource((prev) => ({ ...prev, description: event.target.value }))
+                  }
+                  placeholder="Short description for this item"
+                  style={{ ...inputStyle, marginBottom: 10 }}
+                />
               )}
 
-              {(!profile || showDocuments) && (
-                <>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 8,
-                      marginBottom: 14,
-                    }}
-                  >
-                    <QuickAddButton
-                      label="Add Arbeitszeugnis"
-                      onClick={() => addDocument("arbeitszeugnis")}
-                    />
-                    <QuickAddButton
-                      label="Add certificate"
-                      onClick={() => addDocument("certificate")}
-                    />
-                    <QuickAddButton
-                      label="Add additional CV"
-                      onClick={() => addDocument("additional_cv")}
-                    />
-                    <QuickAddButton
-                      label="Add user note"
-                      onClick={() => addDocument("user_note")}
-                    />
-                    <QuickAddButton
-                      label="Add other"
-                      onClick={() => addDocument("other")}
-                    />
-                  </div>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    {documents.map((doc, index) => (
-                      <div
-                        key={doc.id}
-                        style={{
-                          border: `1px solid ${t.colors.borderSoft}`,
-                          borderRadius: t.radius.md,
-                          background: t.colors.surface,
-                          padding: 14,
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            gap: 12,
-                            flexWrap: "wrap",
-                            marginBottom: 10,
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontSize: 18,
-                              fontWeight: 700,
-                              color: t.colors.textPrimary,
-                            }}
-                          >
-                            {doc.fileName}
-                          </div>
-
-                          <select
-                            value={doc.kind}
-                            onChange={(event) =>
-                              updateDocument(doc.id, {
-                                kind: event.target.value as SourceKind,
-                              })
-                            }
-                            style={selectStyle}
-                          >
-                            <option value="primary_cv">Primary CV</option>
-                            <option value="additional_cv">Additional CV</option>
-                            <option value="arbeitszeugnis">Arbeitszeugnis</option>
-                            <option value="certificate">Certificate</option>
-                            <option value="user_note">User note</option>
-                            <option value="other">Other</option>
-                          </select>
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: 8,
-                            alignItems: "center",
-                            marginBottom: 10,
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              padding: "5px 9px",
-                              borderRadius: 999,
-                              background:
-                                doc.kind === "primary_cv"
-                                  ? t.colors.primarySoft
-                                  : t.colors.backgroundSoft,
-                              color:
-                                doc.kind === "primary_cv"
-                                  ? t.colors.textOnPrimary
-                                  : t.colors.textSecondary,
-                              fontSize: 12,
-                              fontWeight: 700,
-                            }}
-                          >
-                            {KIND_LABELS[doc.kind]}
-                          </span>
-
-                          <span
-                            style={{
-                              fontSize: 12,
-                              color: t.colors.textMuted,
-                            }}
-                          >
-                            Source {index + 1}
-                          </span>
-                        </div>
-
-                        {doc.kind === "other" && (
-                          <input
-                            type="text"
-                            value={doc.description ?? ""}
-                            onChange={(event) =>
-                              updateDocument(doc.id, {
-                                description: event.target.value,
-                              })
-                            }
-                            placeholder="What is this document?"
-                            style={{
-                              ...inputStyle,
-                              marginBottom: 10,
-                            }}
-                          />
-                        )}
-
-                        <textarea
-                          value={doc.text}
-                          onChange={(event) =>
-                            updateDocument(doc.id, { text: event.target.value })
-                          }
-                          rows={10}
-                          placeholder="Paste extracted document text here..."
-                          style={textareaStyle}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {error && (
-                <div
-                  style={{
-                    marginTop: 12,
-                    borderRadius: t.radius.sm,
-                    border: `1px solid ${t.colors.danger}`,
-                    background: "#fff6f6",
-                    padding: 12,
-                    color: t.colors.textPrimary,
-                    fontSize: 14,
-                  }}
-                >
-                  {error}
-                </div>
-              )}
-            </Card>
-          </section>
-
-          <aside
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 16,
-              position: "sticky",
-              top: 18,
-            }}
-          >
-            <Card>
-              <CardTitle
-                title="Profile readiness"
-                subtitle="Click the circle to show or hide details."
+              <textarea
+                value={draftSource.text}
+                onChange={(event) =>
+                  setDraftSource((prev) => ({ ...prev, text: event.target.value }))
+                }
+                rows={16}
+                placeholder="Paste extracted source text here or upload a DOCX..."
+                style={textareaStyle}
               />
 
               <div
-                onClick={() => setDetailsOpen((prev) => !prev)}
                 style={{
-                  cursor: "pointer",
                   display: "flex",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  padding: "8px 0 8px",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  flexWrap: "wrap",
+                  marginTop: 12,
                 }}
               >
-                <ReadinessCircle
-                  completeness={profileCompleteness}
-                  corroborated={corroboratedInfo}
-                  moreInfo={moreInfoRequired}
-                  status={readinessLabel}
-                />
+                <div style={{ fontSize: 12, color: t.colors.textMuted }}>
+                  {draftSource.isStored
+                    ? "This is a stored document preview. Save to update it."
+                    : "This source is not yet committed. Save it to Stored Documents to include it in the system."}
+                </div>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedStoredDocumentId(null);
+                      setDraftSource(createEmptyDraft("primary_cv"));
+                    }}
+                    style={{
+                      ...buttonStyle,
+                      background: t.colors.surface,
+                      color: t.colors.textPrimary,
+                      border: `1px solid ${t.colors.border}`,
+                    }}
+                  >
+                    Clear
+                  </button>
+
+                  <button type="button" onClick={handleSaveSource} style={buttonStyle}>
+                    {isSavingSource ? "Saving..." : "Save to Stored Documents"}
+                  </button>
+                </div>
               </div>
+            </div>
 
-              {detailsOpen && (
-                <div
-                  style={{
-                    marginTop: 12,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 14,
-                  }}
-                >
-                  <DetailLine
-                    label="Profile completeness"
-                    value={describeCompleteness(profileCompleteness)}
-                  />
-                  <DetailLine
-                    label="Corroborated info"
-                    value={describeCorroboration(corroboratedInfo)}
-                  />
-                  <DetailLine
-                    label="More info required"
-                    value={describeMissing(moreInfoRequired)}
-                  />
+            {error ? <InlineError text={error} /> : null}
+          </Card>
 
-                  <SnapshotBlock
-                    title="Still missing"
-                    items={buildMissingItems(profile, pendingPrompts)}
-                    emptyText="No major missing items right now."
+          <Card>
+            <CardTitle
+              title="Stored Documents"
+              subtitle="Click any stored item to preview or update it in Incoming Source Text."
+            />
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              {documents.length > 0 ? (
+                documents.map((doc) => {
+                  const isActive = selectedStoredDocumentId === doc.id;
+                  return (
+                    <div
+                      key={doc.id}
+                      onClick={() => handleStoredDocumentSelect(doc.id)}
+                      style={{
+                        border: `1px solid ${isActive ? t.colors.primary : t.colors.border}`,
+                        background: isActive ? t.colors.primarySoft : t.colors.surface,
+                        color: isActive ? t.colors.textOnPrimary : t.colors.textPrimary,
+                        borderRadius: t.radius.md,
+                        padding: "12px 14px",
+                        minWidth: 180,
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ fontSize: 14, fontWeight: 800 }}>{doc.fileName}</div>
+                      <div style={{ fontSize: 12, opacity: 0.9 }}>{KIND_LABELS[doc.kind]}</div>
+                      <div style={{ fontSize: 12, opacity: 0.9 }}>
+                        {doc.text.trim().length.toLocaleString()} chars
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeStoredDocument(doc.id);
+                        }}
+                        style={{
+                          ...buttonStyle,
+                          background: "transparent",
+                          color: isActive ? t.colors.textOnPrimary : t.colors.textSecondary,
+                          border: `1px solid ${
+                            isActive ? "rgba(255,255,255,0.5)" : t.colors.border
+                          }`,
+                          padding: "6px 10px",
+                          fontSize: 12,
+                          alignSelf: "flex-start",
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  );
+                })
+              ) : (
+                <EmptyState text="No stored documents yet. Save a source from the left pane." />
+              )}
+            </div>
+          </Card>
+        </div>
+
+        <Card>
+          <CardTitle
+            title="Canonical Candidate Profile"
+            subtitle="This is the single source of truth rendered from stored sources and guided clarification."
+          />
+
+          {!profile ? (
+            <EmptyState text="No canonical profile yet. Save source documents, then click Rebuild Profile." />
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "0.85fr 1.15fr", gap: 18 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <ProfilePanel title="Profile Snapshot">
+                  <InfoRow label="Full name" value={profile.fullName ?? "Not yet captured"} />
+                  <InfoRow label="Headline" value={profile.headline ?? "Not yet captured"} />
+                  <InfoRow label="Status" value={readinessLabel} />
+                  <InfoRow
+                    label="Languages"
+                    value={
+                      profile.languages.length
+                        ? profile.languages
+                            .map((item) =>
+                              item.proficiency ? `${item.language} (${item.proficiency})` : item.language
+                            )
+                            .join(", ")
+                        : "Not yet captured"
+                    }
+                  />
+                  <InfoRow
+                    label="Industries"
+                    value={profile.industries.length ? profile.industries.join(", ") : "Not yet captured"}
+                  />
+                </ProfilePanel>
+
+                <ProfilePanel title="Competencies">
+                  <TagGroup title="Core skills" items={profile.coreSkills} emptyText="No core skills stored yet." />
+                  <TagGroup title="Tools" items={profile.tools} emptyText="No tools stored yet." />
+                  <TagGroup title="Standards" items={profile.standards} emptyText="No standards stored yet." />
+                </ProfilePanel>
+
+                <ProfilePanel title="Open Questions">
+                  <TagGroup
+                    title="Needs clarification"
+                    items={profile.openQuestions}
+                    emptyText="No open questions right now."
                     tone="amber"
                   />
-                </div>
-              )}
-            </Card>
+                </ProfilePanel>
+              </div>
 
-            <Card>
-              <CardTitle
-                title="Stored roles"
-                subtitle="These are the roles currently stored in the profile."
-              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <ProfilePanel title="Summary">
+                  <p style={{ margin: 0, fontSize: 14, lineHeight: 1.65, color: t.colors.textPrimary }}>
+                    {profile.summary ?? "No summary captured yet."}
+                  </p>
+                </ProfilePanel>
 
-              {profile?.roles.length ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {profile.roles.map((role) => (
-                    <div
-                      key={buildRoleKey(role)}
-                      style={{
-                        border: `1px solid ${t.colors.borderSoft}`,
-                        borderRadius: t.radius.md,
-                        padding: 12,
-                        background: t.colors.surface,
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontWeight: 700,
-                          fontSize: 14,
-                          color: t.colors.textPrimary,
-                        }}
-                      >
-                        {role.title}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 13,
-                          color: t.colors.textSecondary,
-                          marginTop: 2,
-                        }}
-                      >
-                        {role.company ?? "Unknown company"}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 12,
-                          color: t.colors.textMuted,
-                          marginTop: 6,
-                          marginBottom: 8,
-                        }}
-                      >
-                        {formatRoleDates(role)}
-                      </div>
-
-                      <MiniList
-                        title="Stored details"
-                        items={role.achievements}
-                        emptyText="No stored detail points yet."
-                      />
+                <ProfilePanel title="Roles">
+                  {profile.roles.length > 0 ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                      {profile.roles.map((role) => (
+                        <div key={buildRoleKey(role)} style={subtlePanelStyle}>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: t.colors.textPrimary }}>
+                            {role.title || "Untitled role"}
+                          </div>
+                          <div style={{ fontSize: 13, color: t.colors.textSecondary, marginTop: 2 }}>
+                            {role.company ?? "Unknown company"}
+                            {role.location ? ` · ${role.location}` : ""}
+                          </div>
+                          <div style={{ fontSize: 12, color: t.colors.textMuted, marginTop: 6 }}>
+                            {formatRoleDates(role)}
+                          </div>
+                          <MiniList
+                            title="Stored details"
+                            items={role.achievements}
+                            emptyText="No stored detail points yet."
+                          />
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState text="Build the profile first to see stored roles." />
-              )}
-            </Card>
+                  ) : (
+                    <EmptyState text="No roles stored yet." />
+                  )}
+                </ProfilePanel>
 
-            <Card>
-              <CardTitle
-                title="Stored claims"
-                subtitle="This is what the system currently stores from the provided material."
-              />
-
-              {profile?.verifiedClaims.length ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {profile.verifiedClaims.slice(0, 4).map((claim, index) => (
-                    <div
-                      key={`${claim.claim}-${index}`}
-                      style={{
-                        border: `1px solid ${t.colors.success}`,
-                        background: t.colors.accentGreen,
-                        borderRadius: t.radius.md,
-                        padding: 12,
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: 14,
-                          lineHeight: 1.5,
-                          color: t.colors.textPrimary,
-                          fontWeight: 600,
-                        }}
-                      >
-                        {claim.claim}
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 6,
-                          fontSize: 12,
-                          color: t.colors.textSecondary,
-                        }}
-                      >
-                        Sources: {claim.evidence.join(", ")}
-                      </div>
+                <ProfilePanel title="Education and Certifications">
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div>
+                      <SectionMiniTitle>Education</SectionMiniTitle>
+                      {profile.education.length > 0 ? (
+                        profile.education.map((item, index) => (
+                          <div key={`${item.degree}-${index}`} style={{ ...subtlePanelStyle, marginBottom: 8 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700 }}>{item.degree}</div>
+                            <div style={{ fontSize: 13, color: t.colors.textSecondary, marginTop: 4 }}>
+                              {[item.field, item.institution, item.endDate].filter(Boolean).join(" · ") ||
+                                "Details not fully captured"}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <EmptyState text="No education stored yet." />
+                      )}
                     </div>
-                  ))}
+
+                    <div>
+                      <SectionMiniTitle>Certifications</SectionMiniTitle>
+                      {profile.certifications.length > 0 ? (
+                        profile.certifications.map((item, index) => (
+                          <div key={`${item.name}-${index}`} style={{ ...subtlePanelStyle, marginBottom: 8 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700 }}>{item.name}</div>
+                            <div style={{ fontSize: 13, color: t.colors.textSecondary, marginTop: 4 }}>
+                              {[item.issuer, item.date].filter(Boolean).join(" · ") ||
+                                "Details not fully captured"}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <EmptyState text="No certifications stored yet." />
+                      )}
+                    </div>
+                  </div>
+                </ProfilePanel>
+
+                <ProfilePanel title="Evidence-backed Claims">
+                  {profile.verifiedClaims.length > 0 ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {profile.verifiedClaims.map((claim, index) => (
+                        <div key={`${claim.claim}-${index}`} style={subtlePanelStyle}>
+                          <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.55 }}>{claim.claim}</div>
+                          <div style={{ fontSize: 12, color: t.colors.textSecondary, marginTop: 6 }}>
+                            Sources: {claim.evidence.join(", ")}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState text="No evidence-backed claims stored yet." />
+                  )}
+                </ProfilePanel>
+              </div>
+            </div>
+          )}
+        </Card>
+
+        <div style={{ marginTop: 18 }}>
+          <Card>
+            <CardTitle
+              title="Profile Conversation"
+              subtitle="The assistant remains available to capture clarifications, but new facts should still be committed into Stored Documents."
+            />
+
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+                maxHeight: 260,
+                overflowY: "auto",
+              }}
+            >
+              {messages.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))}
+            </div>
+
+            {activePrompt ? (
+              <div style={{ ...subtlePanelStyle, marginTop: 14, background: t.colors.accentYellow }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 800,
+                    color: t.colors.textSecondary,
+                    marginBottom: 8,
+                  }}
+                >
+                  Current question
                 </div>
-              ) : (
-                <EmptyState text="No stored claims shown yet." />
-              )}
-            </Card>
-          </aside>
+                <div style={{ fontSize: 14, lineHeight: 1.6 }}>{activePrompt.text}</div>
+              </div>
+            ) : null}
+
+            <form
+              onSubmit={handleReplySubmit}
+              style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}
+            >
+              <textarea
+                value={replyText}
+                onChange={(event) => setReplyText(event.target.value)}
+                rows={4}
+                placeholder="Add a correction, answer, or clarification here..."
+                style={textareaStyle}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <span style={{ fontSize: 12, color: t.colors.textMuted }}>
+                  Replies can be prepared as user notes, then explicitly saved into Stored Documents.
+                </span>
+                <button type="submit" style={buttonStyle}>
+                  {isChatting ? "Sending..." : "Send reply"}
+                </button>
+              </div>
+            </form>
+          </Card>
         </div>
       </div>
     </main>
   );
 }
 
-function createDocument(kind: SourceKind, count: number): InputDocument {
+function persistProfileForTailoring(
+  nextProfile: CandidateProfile,
+  sourceDocs: InputDocument[],
+  localeValue: "en" | "de",
+  readinessLabel: string
+): void {
+  if (typeof window === "undefined") return;
+
+  sessionStorage.setItem(CANDIDATE_PROFILE_STORAGE_KEY, JSON.stringify(nextProfile));
+  sessionStorage.setItem(
+    CANDIDATE_PROFILE_META_STORAGE_KEY,
+    JSON.stringify({
+      locale: localeValue,
+      storedAt: new Date().toISOString(),
+      sourceCount: sourceDocs.filter((doc) => doc.text.trim()).length,
+      readinessLabel,
+    })
+  );
+  sessionStorage.setItem(
+    CANDIDATE_DOCUMENTS_STORAGE_KEY,
+    JSON.stringify(
+      sourceDocs
+        .filter((doc) => doc.text.trim())
+        .map((doc) => ({
+          fileName: doc.fileName,
+          kind: doc.kind,
+          text: doc.text,
+          description: doc.description ?? "",
+          isPrimary: Boolean(doc.isPrimary),
+        }))
+    )
+  );
+}
+
+function createEmptyDraft(kind: SourceKind): DraftSource {
   return {
-    id: createId(),
+    id: null,
+    fileName: autoFileNameForKind(kind, 1),
     kind,
-    fileName: autoFileNameForKind(kind, count),
     text: "",
-    isPrimary: kind === "primary_cv",
     description: "",
+    isStored: false,
   };
 }
 
@@ -1647,31 +1275,30 @@ function autoFileNameForKind(kind: SourceKind, count: number): string {
     case "certificate":
       return `Certificate ${count}`;
     case "user_note":
-      return `Conversation note ${count}`;
+      return `User note ${count}`;
     case "other":
-      return `Other document ${count}`;
+      return `Other / Misc ${count}`;
     default:
       return "Document";
   }
+}
+
+function stripDocxExtension(fileName: string): string {
+  return fileName.replace(/\.docx$/i, "").trim();
 }
 
 function buildPromptsFromProfile(profile: CandidateProfile): ActivePrompt[] {
   const prompts: ActivePrompt[] = [];
 
   if (!profile.fullName) {
-    prompts.push({
-      id: createId(),
-      text: "What is the candidate's full name?",
-    });
+    prompts.push({ id: createId(), text: "What is the candidate's full name?" });
   }
-
   if (profile.education.length === 0) {
     prompts.push({
       id: createId(),
       text: "What are the candidate's formal education degrees and institutions?",
     });
   }
-
   if (profile.certifications.length === 0) {
     prompts.push({
       id: createId(),
@@ -1679,39 +1306,7 @@ function buildPromptsFromProfile(profile: CandidateProfile): ActivePrompt[] {
     });
   }
 
-  for (const role of profile.roles.slice(0, 2)) {
-    if (role.achievements.length < 2) {
-      prompts.push({
-        id: createId(),
-        relatedRoleKey: buildRoleKey(role),
-        text: `May I ask something about ${formatRoleLabel(role)}? A short list of the main responsibilities would improve future tailoring.`,
-      });
-    }
-  }
-
-  for (const openQuestion of profile.openQuestions.slice(0, 2)) {
-    prompts.push({
-      id: createId(),
-      text: openQuestion,
-    });
-  }
-
   return prompts;
-}
-
-function buildMissingItems(
-  profile: CandidateProfile | null,
-  prompts: ActivePrompt[]
-): string[] {
-  if (!profile) return [];
-  if (prompts.length > 0) return prompts.map((item) => item.text).slice(0, 5);
-  return profile.openQuestions.slice(0, 5);
-}
-
-function formatRoleLabel(role: CandidateRole): string {
-  if (role.company) return `the role at ${role.company}`;
-  if (role.title) return `the ${role.title} role`;
-  return "this role";
 }
 
 function buildRoleKey(role: CandidateRole): string {
@@ -1733,101 +1328,89 @@ function createAssistantMessage(
   tone: "status" | "question" | "success" | "error" | "neutral",
   text: string
 ): ChatMessage {
-  return {
-    id: createId(),
-    sender: "assistant",
-    tone,
-    text,
-  };
+  return { id: createId(), sender: "assistant", tone, text };
 }
 
 function createId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function describeCompleteness(value: number): string {
-  if (value >= 0.8) return "Strong";
-  if (value >= 0.55) return "Good";
-  if (value >= 0.3) return "Developing";
-  return "Early";
-}
-
-function describeCorroboration(value: number): string {
-  if (value >= 0.75) return "Well supported";
-  if (value >= 0.4) return "Some support";
-  if (value > 0) return "Limited support";
-  return "Not yet supported";
-}
-
-function describeMissing(value: number): string {
-  if (value >= 0.7) return "Several important gaps";
-  if (value >= 0.35) return "Some important gaps";
-  if (value > 0) return "Few important gaps";
-  return "No major gaps";
-}
-
-function renderSuggestedActionHelp(action: SuggestedAction): string {
-  switch (action) {
-    case "add_manual_summary":
-      return "You do not need perfect source text to continue. Add a short manual summary note with the main facts you know, then build the profile from that.";
-    case "paste_into_primary_cv":
-      return "Paste your main CV text into the Primary CV source box below.";
-    case "add_user_note":
-      return "Add a user note for facts, corrections, or temporary details that are not yet in a document.";
-    case "click_build_profile":
-      return "You have enough material to generate or refresh the candidate profile now.";
-    case "answer_active_prompt":
-      return "Reply in your own words to the current question shown above.";
-    case "no_action":
-    default:
-      return "";
-  }
-}
-
 function Card(props: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <section
-      style={{
-        background: t.colors.surface,
-        border: `1px solid ${t.colors.border}`,
-        borderRadius: t.radius.lg,
-        padding: 18,
-        boxShadow: t.shadow.md,
-      }}
-    >
-      {props.children}
-    </section>
-  );
+  return <section style={cardStyle}>{props.children}</section>;
 }
 
 function CardTitle(props: { title: string; subtitle: string }): React.JSX.Element {
   return (
     <div style={{ marginBottom: 14 }}>
-      <h2
-        style={{
-          margin: 0,
-          fontSize: 18,
-          lineHeight: 1.25,
-          fontWeight: 800,
-          color: t.colors.textPrimary,
-        }}
-      >
-        {props.title}
-      </h2>
-      <p
-        style={{
-          margin: "6px 0 0",
-          color: t.colors.textMuted,
-          fontSize: 13,
-          lineHeight: 1.5,
-        }}
-      >
+      <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25, fontWeight: 800 }}>{props.title}</h2>
+      <p style={{ margin: "6px 0 0", color: t.colors.textMuted, fontSize: 13, lineHeight: 1.5 }}>
         {props.subtitle}
       </p>
+    </div>
+  );
+}
+
+function ProfilePanel(props: { title: string; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div style={{ ...subtlePanelStyle, background: t.colors.backgroundSoft }}>
+      <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>{props.title}</div>
+      {props.children}
+    </div>
+  );
+}
+
+function SectionMiniTitle(props: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div style={{ fontSize: 13, fontWeight: 800, color: t.colors.textSecondary, marginBottom: 8 }}>
+      {props.children}
+    </div>
+  );
+}
+
+function InfoRow(props: { label: string; value: string }): React.JSX.Element {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: t.colors.textSecondary, marginBottom: 4 }}>
+        {props.label}
+      </div>
+      <div style={{ fontSize: 14, lineHeight: 1.55, color: t.colors.textPrimary }}>{props.value}</div>
+    </div>
+  );
+}
+
+function TagGroup(props: {
+  title: string;
+  items: string[];
+  emptyText: string;
+  tone?: "default" | "amber";
+}): React.JSX.Element {
+  const tone = props.tone ?? "default";
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <SectionMiniTitle>{props.title}</SectionMiniTitle>
+      {props.items.length > 0 ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {props.items.map((item, index) => (
+            <span
+              key={`${item}-${index}`}
+              style={{
+                display: "inline-flex",
+                padding: "7px 10px",
+                borderRadius: 999,
+                background: tone === "amber" ? t.colors.accentYellow : t.colors.surface,
+                border: `1px solid ${tone === "amber" ? t.colors.warning : t.colors.borderSoft}`,
+                fontSize: 12,
+                color: t.colors.textPrimary,
+              }}
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <EmptyState text={props.emptyText} />
+      )}
     </div>
   );
 }
@@ -1840,7 +1423,7 @@ function MessageBubble(props: { message: ChatMessage }): React.JSX.Element {
     status: {
       background: t.colors.backgroundSoft,
       border: t.colors.primary,
-      color: t.colors.textOnPrimary,
+      color: t.colors.textPrimary,
       badge: "Status",
     },
     question: {
@@ -1878,12 +1461,7 @@ function MessageBubble(props: { message: ChatMessage }): React.JSX.Element {
   }[message.tone];
 
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: isAssistant ? "flex-start" : "flex-end",
-      }}
-    >
+    <div style={{ display: "flex", justifyContent: isAssistant ? "flex-start" : "flex-end" }}>
       <div
         style={{
           width: "min(100%, 760px)",
@@ -1909,38 +1487,17 @@ function MessageBubble(props: { message: ChatMessage }): React.JSX.Element {
         >
           {toneStyles.badge}
         </div>
-
-        <div
-          style={{
-            fontSize: 14,
-            lineHeight: 1.6,
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {message.text}
-        </div>
+        <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{message.text}</div>
       </div>
     </div>
   );
 }
 
-function StatusPill(props: {
-  label: string;
-  tone: "blue" | "green" | "amber";
-}): React.JSX.Element {
+function StatusPill(props: { label: string; tone: "blue" | "green" | "amber" }): React.JSX.Element {
   const palette = {
-    blue: {
-      background: t.colors.primarySoft,
-      color: t.colors.textOnPrimary,
-    },
-    green: {
-      background: t.colors.accentGreen,
-      color: t.colors.textPrimary,
-    },
-    amber: {
-      background: t.colors.accentYellow,
-      color: t.colors.textPrimary,
-    },
+    blue: { background: t.colors.primarySoft, color: t.colors.textOnPrimary },
+    green: { background: t.colors.accentGreen, color: t.colors.textPrimary },
+    amber: { background: t.colors.accentYellow, color: t.colors.textPrimary },
   }[props.tone];
 
   return (
@@ -1961,143 +1518,40 @@ function StatusPill(props: {
   );
 }
 
-function QuickAddButton(props: {
-  label: string;
-  onClick: () => void;
-}): React.JSX.Element {
+function MiniList(props: { title: string; items: string[]; emptyText: string }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      style={{
-        ...buttonStyle,
-        background: t.colors.surface,
-        color: t.colors.textPrimary,
-        border: `1px solid ${t.colors.border}`,
-      }}
-    >
-      {props.label}
-    </button>
-  );
-}
-
-function SnapshotBlock(props: {
-  title: string;
-  items: string[];
-  emptyText?: string;
-  tone?: "default" | "amber";
-}): React.JSX.Element {
-  const tone = props.tone ?? "default";
-
-  const toneStyles =
-    tone === "amber"
-      ? {
-          background: t.colors.accentYellow,
-          border: t.colors.warning,
-        }
-      : {
-          background: t.colors.surface,
-          border: t.colors.borderSoft,
-        };
-
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 13,
-          fontWeight: 800,
-          color: t.colors.textSecondary,
-          marginBottom: 8,
-        }}
-      >
-        {props.title}
-      </div>
-
-      {props.items.length > 0 ? (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {props.items.map((item, index) => (
-            <span
-              key={`${item}-${index}`}
-              style={{
-                display: "inline-flex",
-                padding: "7px 10px",
-                borderRadius: 999,
-                background: toneStyles.background,
-                border: `1px solid ${toneStyles.border}`,
-                fontSize: 12,
-                lineHeight: 1.4,
-                color: t.colors.textPrimary,
-              }}
-            >
-              {item}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <div
-          style={{
-            fontSize: 13,
-            color: t.colors.textMuted,
-          }}
-        >
-          {props.emptyText ?? "Nothing yet."}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MiniList(props: {
-  title: string;
-  items: string[];
-  emptyText: string;
-}): React.JSX.Element {
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 800,
-          color: t.colors.textSecondary,
-          marginBottom: 6,
-        }}
-      >
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: t.colors.textSecondary, marginBottom: 6 }}>
         {props.title}
       </div>
       {props.items.length > 0 ? (
-        <ul
-          style={{
-            margin: 0,
-            paddingLeft: 18,
-            color: t.colors.textSecondary,
-            fontSize: 13,
-            lineHeight: 1.5,
-          }}
-        >
+        <ul style={{ margin: 0, paddingLeft: 18, color: t.colors.textSecondary, fontSize: 13, lineHeight: 1.5 }}>
           {props.items.map((item, index) => (
             <li key={`${item}-${index}`}>{item}</li>
           ))}
         </ul>
       ) : (
-        <div
-          style={{
-            fontSize: 13,
-            color: t.colors.textMuted,
-          }}
-        >
-          {props.emptyText}
-        </div>
+        <EmptyState text={props.emptyText} />
       )}
     </div>
   );
 }
 
 function EmptyState(props: { text: string }): React.JSX.Element {
+  return <div style={{ fontSize: 13, color: t.colors.textMuted }}>{props.text}</div>;
+}
+
+function InlineError(props: { text: string }): React.JSX.Element {
   return (
     <div
       style={{
-        fontSize: 13,
-        color: t.colors.textMuted,
+        marginTop: 12,
+        borderRadius: t.radius.sm,
+        border: `1px solid ${t.colors.danger}`,
+        background: "#fff6f6",
+        padding: 12,
+        color: t.colors.textPrimary,
+        fontSize: 14,
       }}
     >
       {props.text}
@@ -2105,175 +1559,67 @@ function EmptyState(props: { text: string }): React.JSX.Element {
   );
 }
 
-function DetailLine(props: { label: string; value: string }): React.JSX.Element {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        gap: 12,
-        fontSize: 14,
-      }}
-    >
-      <span style={{ color: t.colors.textMuted }}>{props.label}</span>
-      <span style={{ color: t.colors.textPrimary, fontWeight: 700, textAlign: "right" }}>
-        {props.value}
-      </span>
-    </div>
-  );
-}
+const eyebrowStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "6px 10px",
+  borderRadius: 999,
+  background: t.colors.primarySoft,
+  color: t.colors.textOnPrimary,
+  fontSize: 12,
+  fontWeight: 700,
+};
 
-function ReadinessCircle(props: {
-  completeness: number;
-  corroborated: number;
-  moreInfo: number;
-  status: string;
-}): React.JSX.Element {
-  const size = 320;
-  const center = size / 2;
+const titleStyle: React.CSSProperties = {
+  margin: "10px 0 8px",
+  fontSize: 32,
+  lineHeight: 1.15,
+  fontWeight: 800,
+  color: t.colors.textPrimary,
+};
 
-  const outer = { radius: 112, stroke: 22, color: "#F2C94C" };
-  const middle = { radius: 84, stroke: 18, color: "#6FCF97" };
-  const inner = { radius: 58, stroke: 14, color: "#EB5757" };
+const subtitleStyle: React.CSSProperties = {
+  margin: 0,
+  maxWidth: 980,
+  color: t.colors.textSecondary,
+  fontSize: 15,
+  lineHeight: 1.55,
+};
 
-  return (
-    <div style={{ position: "relative", width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <defs>
-          <path id="outerPath" d={circlePath(center, center, outer.radius)} />
-          <path id="middlePath" d={circlePath(center, center, middle.radius)} />
-          <path id="innerPath" d={circlePath(center, center, inner.radius)} />
-        </defs>
+const topBarStyle: React.CSSProperties = {
+  marginBottom: 18,
+  padding: 14,
+  borderRadius: t.radius.md,
+  background: t.colors.surface,
+  border: `1px solid ${t.colors.border}`,
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: 12,
+  boxShadow: t.shadow.sm,
+};
 
-        <Ring
-          center={center}
-          radius={outer.radius}
-          stroke={outer.stroke}
-          progress={props.completeness}
-          color={outer.color}
-        />
-        <Ring
-          center={center}
-          radius={middle.radius}
-          stroke={middle.stroke}
-          progress={props.corroborated}
-          color={middle.color}
-        />
-        <Ring
-          center={center}
-          radius={inner.radius}
-          stroke={inner.stroke}
-          progress={props.moreInfo}
-          color={inner.color}
-        />
+const cardStyle: React.CSSProperties = {
+  background: t.colors.surface,
+  border: `1px solid ${t.colors.border}`,
+  borderRadius: t.radius.lg,
+  padding: 18,
+  boxShadow: t.shadow.md,
+};
 
-        <text fontSize="11" fill={t.colors.textSecondary} fontWeight="700">
-          <textPath href="#outerPath" startOffset="18%">
-            Profile completeness
-          </textPath>
-        </text>
+const editorShellStyle: React.CSSProperties = {
+  border: `1px solid ${t.colors.borderSoft}`,
+  borderRadius: t.radius.md,
+  padding: 14,
+  background: t.colors.surface,
+};
 
-        <text fontSize="11" fill={t.colors.textSecondary} fontWeight="700">
-          <textPath href="#middlePath" startOffset="20%">
-            Corroborated info
-          </textPath>
-        </text>
-
-        <text fontSize="10" fill={t.colors.textSecondary} fontWeight="700">
-          <textPath href="#innerPath" startOffset="15%">
-            More info required
-          </textPath>
-        </text>
-      </svg>
-
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexDirection: "column",
-          textAlign: "center",
-          pointerEvents: "none",
-          padding: "0 72px",
-        }}
-      >
-        <div
-          style={{
-            fontSize: 12,
-            fontWeight: 700,
-            color: t.colors.textMuted,
-            marginBottom: 6,
-          }}
-        >
-          Profile readiness
-        </div>
-        <div
-          style={{
-            fontSize: 28,
-            lineHeight: 1.05,
-            fontWeight: 800,
-            color: t.colors.textPrimary,
-          }}
-        >
-          {props.status}
-        </div>
-      </div>
-    </div>
-  );
-
-  function Ring({
-    center,
-    radius,
-    stroke,
-    progress,
-    color,
-  }: {
-    center: number;
-    radius: number;
-    stroke: number;
-    progress: number;
-    color: string;
-  }) {
-    const circumference = 2 * Math.PI * radius;
-    const dashOffset = circumference * (1 - progress);
-
-    return (
-      <>
-        <circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke={t.colors.borderSoft}
-          strokeWidth={stroke}
-        />
-        <circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={dashOffset}
-          transform={`rotate(-90 ${center} ${center})`}
-        />
-      </>
-    );
-  }
-
-  function circlePath(cx: number, cy: number, r: number): string {
-    return `
-      M ${cx}, ${cy}
-      m -${r}, 0
-      a ${r},${r} 0 1,1 ${2 * r},0
-      a ${r},${r} 0 1,1 -${2 * r},0
-    `;
-  }
-}
+const subtlePanelStyle: React.CSSProperties = {
+  border: `1px solid ${t.colors.borderSoft}`,
+  borderRadius: t.radius.md,
+  padding: 12,
+  background: t.colors.surface,
+};
 
 const buttonStyle: React.CSSProperties = {
   border: "1px solid transparent",
@@ -2283,6 +1629,7 @@ const buttonStyle: React.CSSProperties = {
   fontWeight: 700,
   background: t.colors.primary,
   color: t.colors.textOnPrimary,
+  cursor: "pointer",
 };
 
 const inputStyle: React.CSSProperties = {

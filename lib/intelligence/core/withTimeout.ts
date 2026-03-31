@@ -1,19 +1,21 @@
 export async function withTimeout<T>(
   promise: Promise<T>,
-  ms: number
+  timeoutMs: number,
+  label = "Operation"
 ): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new Error("OpenAI request timed out"));
-    }, ms);
+      reject(new Error(`${label} timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
   });
 
   try {
-    const result = await Promise.race([promise, timeoutPromise]);
-    return result as T;
+    return await Promise.race([promise, timeoutPromise]);
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }

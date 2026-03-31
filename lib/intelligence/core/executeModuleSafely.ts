@@ -1,31 +1,17 @@
-type SafeModuleResult<T> = {
-  ok: boolean;
-  data: T | null;
-  error: string | null;
-};
-
-export async function executeModuleSafely<T>(
-  label: string,
-  runner: () => Promise<T>
-): Promise<SafeModuleResult<T>> {
+export async function executeModuleSafely<T>(fn: () => Promise<T>): Promise<{
+  ok: true;
+  data: T;
+} | {
+  ok: false;
+  error: string;
+}> {
   try {
-    const data = await runner();
-
-    return {
-      ok: true,
-      data,
-      error: null,
-    };
+    const data = await fn();
+    return { ok: true, data };
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : `${label} failed`;
-
-    console.error(`[${label}]`, error);
-
     return {
       ok: false,
-      data: null,
-      error: message,
+      error: error instanceof Error ? error.message : "Unknown module error.",
     };
   }
 }

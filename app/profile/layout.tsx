@@ -1,7 +1,9 @@
+import type { ReactNode } from "react";
+
 export default function ProfileLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return <>{children}</>;
 }

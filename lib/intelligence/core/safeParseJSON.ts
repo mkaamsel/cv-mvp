@@ -1,35 +1,15 @@
-export function safeParseJSON<T>(raw: string): T | null {
-  if (!raw || typeof raw !== "string") {
-    return null;
-  }
+export function safeParseJSON<T>(value: string): T {
+  const trimmed = value.trim();
 
-  const trimmed = raw.trim();
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
 
-  const candidates = [
-    trimmed,
-    trimmed.replace(/```json/gi, "").replace(/```/g, "").trim(),
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate) as T;
-    } catch {
-      // continue
+    if (fenced?.[1]) {
+      return JSON.parse(fenced[1]) as T;
     }
+
+    throw new Error("Invalid JSON response.");
   }
-
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    const sliced = trimmed.slice(firstBrace, lastBrace + 1);
-
-    try {
-      return JSON.parse(sliced) as T;
-    } catch {
-      // continue
-    }
-  }
-
-  return null;
 }

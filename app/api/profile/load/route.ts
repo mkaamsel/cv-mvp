@@ -1,4 +1,4 @@
-import { loadCandidateWorkspace } from "@/lib/profile/profile-store";
+import { loadOrCreateCandidateWorkspace } from "@/lib/profile/profile-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +19,10 @@ type LoadProfileError = {
   error: string;
 };
 
-function jsonResponse(body: LoadProfileSuccess | LoadProfileError, status = 200): Response {
+function jsonResponse(
+  body: LoadProfileSuccess | LoadProfileError,
+  status = 200
+): Response {
   return Response.json(body, {
     status,
     headers: {
@@ -30,7 +33,7 @@ function jsonResponse(body: LoadProfileSuccess | LoadProfileError, status = 200)
 
 export async function GET(): Promise<Response> {
   try {
-    const workspace = await loadCandidateWorkspace();
+    const workspace = await loadOrCreateCandidateWorkspace();
 
     return jsonResponse({
       ok: true,
@@ -45,7 +48,8 @@ export async function GET(): Promise<Response> {
         : null,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown server error.";
+    const message =
+      error instanceof Error ? error.message : "Unknown server error.";
 
     return jsonResponse(
       {

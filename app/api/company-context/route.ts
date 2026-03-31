@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { buildCompanyContextInstructions } from "@/lib/prompts/companyContextPrompt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,17 +19,19 @@ type CompanyContextRequest = {
   extractedText?: string;
 };
 
+type CompanyContext = {
+  industry: string[];
+  financeEnvironment: string[];
+  reportingEnvironment: string[];
+  leadershipScope: string[];
+  operatingSignals: string[];
+  cultureSignals: string[];
+  summary: string;
+};
+
 type CompanyContextSuccess = {
   ok: true;
-  companyContext: {
-    industry: string[];
-    financeEnvironment: string[];
-    reportingEnvironment: string[];
-    leadershipScope: string[];
-    operatingSignals: string[];
-    cultureSignals: string[];
-    summary: string;
-  };
+  companyContext: CompanyContext;
   meta: {
     model: string;
     locale: "en" | "de";
@@ -115,115 +118,6 @@ async function callModelWithFallback(
   throw lastError ?? new Error("All fallback models failed.");
 }
 
-function buildInstructions(locale: "en" | "de"): string {
-  const languageHint =
-    locale === "de"
-      ? "Write the summary in German unless the context clearly requires English."
-      : "Write the summary in English unless the context clearly requires German.";
-
-  return `
-You are the company-context inference layer inside an AI job application system.
-
-Your task is to infer the likely company and role environment from:
-- the structured job
-- the extracted job text
-
-Do NOT browse the web.
-Do NOT invent facts not reasonably supported by the job text.
-Be conservative and infer only what is useful for tailoring and recommendation logic.
-
-Your output should help answer:
-- What type of finance environment is this?
-- What operating environment is this role embedded in?
-- What reporting / governance context likely matters?
-- What leadership or stakeholder context is implied?
-- What cultural or operating signals matter for positioning?
-
-Infer the following fields:
-
-1. industry
-Examples:
-- manufacturing
-- industrial technology
-- shared services
-- SaaS
-- retail
-- logistics
-- pharma
-Only include items that are reasonably supported.
-
-2. financeEnvironment
-Examples:
-- operational finance
-- plant finance
-- controlling-heavy
-- accounting-led
-- business partnering
-- international matrix environment
-- group reporting environment
-
-3. reportingEnvironment
-Examples:
-- HGB
-- IFRS
-- US GAAP
-- SOX
-- SEC-linked reporting
-- statutory reporting
-- internal controls environment
-
-4. leadershipScope
-Examples:
-- local finance leadership
-- people management
-- leadership team participation
-- cross-border stakeholder management
-- HQ coordination
-
-5. operatingSignals
-Examples:
-- standard costing
-- inventory focus
-- capex support
-- pricing analysis
-- process standardization
-- ERP / systems optimization
-- change management
-
-6. cultureSignals
-Examples:
-- safety culture
-- excellence
-- respect
-- continuous improvement
-- accountability
-
-7. summary
-A short practical summary of the company/role environment for later matching and positioning.
-Keep it concise and useful.
-
-Rules:
-- Return JSON only.
-- Do not repeat the whole job description.
-- Do not over-infer.
-- If something is only weakly implied, leave it out.
-- Prefer practical finance interpretation over marketing language.
-
-Return exactly this shape:
-{
-  "industry": string[],
-  "financeEnvironment": string[],
-  "reportingEnvironment": string[],
-  "leadershipScope": string[],
-  "operatingSignals": string[],
-  "cultureSignals": string[],
-  "summary": string
-}
-
-${languageHint}
-`.trim();
-}
-
 function safeParseJson<T>(text: string): T {
   const trimmed = text.trim();
 
@@ -240,10 +134,14 @@ function safeParseJson<T>(text: string): T {
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -296,7 +194,7 @@ ${typeof body.extractedText === "string" ? body.extractedText.trim() : ""}
 
     const { response, modelUsed } = await callModelWithFallback(
       client,
-      buildInstructions(locale),
+      buildCompanyContextInstructions(locale),
       [
         {
           role: "user",
@@ -345,7 +243,7 @@ ${typeof body.extractedText === "string" ? body.extractedText.trim() : ""}
           typeof parsed.summary === "string" && parsed.summary.trim()
             ? parsed.summary.trim()
             : locale === "de"
-              ? "Der Unternehmens- und Rollen-Kontext wurde aus der Stellenbeschreibung abgeleitet."
+              ? "Der Unternehmens- und Rollenkontext wurde aus der Stellenbeschreibung abgeleitet."
               : "The company and role context was inferred from the job description.",
       },
       meta: {

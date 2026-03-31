@@ -284,4 +284,4 @@ The output must help answer:
 - If the user still wants to apply, how should the documents be positioned credibly?
 
 That is the standard.
-`;
+`.trim();

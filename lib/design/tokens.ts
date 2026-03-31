@@ -46,3 +46,5 @@ export const designTokens = {
     container: "1200px",
   },
 } as const;
+
+export type DesignTokens = typeof designTokens;

@@ -1,88 +1,46 @@
-import Link from "next/link";
-import Button from "@/components/ui/Button";
-import Card from "@/components/ui/Card";
-import PageHeader from "@/components/ui/PageHeader";
-import Section from "@/components/ui/Section";
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import AppCard from "@/components/ui/AppCard";
+import SectionLabel from "@/components/ui/SectionLabel";
+import { useWorkspace } from "@/components/workspace/WorkspaceProvider";
 
 export default function WorkspacePage() {
+  const router = useRouter();
+  const { progress, getStepHref, state } = useWorkspace();
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      router.replace(getStepHref(progress.nextStep));
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [router, progress.nextStep, getStepHref]);
+
   return (
-    <main>
-      <Section>
-        <PageHeader
-          eyebrow="Workspace"
-          title="Choose how you want to start"
-          description="Get immediate value with quick tailoring, or build your canonical profile for stronger, more consistent applications later."
-        />
+    <div className="space-y-6">
+      <AppCard className="p-6 sm:p-8">
+        <SectionLabel tone="blue">Workspace</SectionLabel>
 
-        <div className="grid gap-6 md:grid-cols-2">
-          <Card className="p-6 md:p-8">
-            <div className="mb-4 inline-flex rounded-full bg-[var(--color-primary-soft)] px-3 py-1 text-sm font-medium text-[var(--color-text-secondary)]">
-              Fast start
-            </div>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight text-[#f4efe9] sm:text-4xl">
+          Preparing your workspace
+        </h1>
 
-            <h2 className="text-2xl font-semibold text-[var(--color-text-primary)]">
-              Quick Tailor Now
-            </h2>
+        <p className="mt-4 max-w-3xl text-base leading-7 text-[#d8cbbf]">
+          The workspace checks what is already available and routes you to the
+          next meaningful step.
+        </p>
 
-            <p className="mt-3 text-[var(--color-text-secondary)] leading-7">
-              Paste your CV and the job description to generate a tailored CV
-              and cover letter without setting up a full profile first.
-            </p>
-
-            <ul className="mt-5 space-y-2 text-sm text-[var(--color-text-secondary)]">
-              <li>• Immediate role-fit analysis</li>
-              <li>• Tailored CV draft</li>
-              <li>• Cover letter draft</li>
-              <li>• Best for fast applications</li>
-            </ul>
-
-            <div className="mt-6">
-              <Link href="/tailoring">
-                <Button variant="primary">Start quick tailoring</Button>
-              </Link>
-            </div>
-          </Card>
-
-          <Card className="p-6 md:p-8">
-            <div className="mb-4 inline-flex rounded-full bg-[var(--color-accent-green)] px-3 py-1 text-sm font-medium text-[var(--color-text-secondary)]">
-              Guided setup
-            </div>
-
-            <h2 className="text-2xl font-semibold text-[var(--color-text-primary)]">
-              Build Canonical Profile
-            </h2>
-
-            <p className="mt-3 text-[var(--color-text-secondary)] leading-7">
-              Upload or paste one or more CVs, let the system extract your
-              profile, and refine it once for more credible tailoring later.
-            </p>
-
-            <ul className="mt-5 space-y-2 text-sm text-[var(--color-text-secondary)]">
-              <li>• Reusable candidate profile</li>
-              <li>• Better long-term consistency</li>
-              <li>• Missing-data prompts</li>
-              <li>• Best for repeated applications</li>
-            </ul>
-
-            <div className="mt-6">
-              <Link href="/profile">
-                <Button variant="secondary">Build profile</Button>
-              </Link>
-            </div>
-          </Card>
+        <div className="mt-6 rounded-2xl border border-[#2d2621] bg-[#211d1a] p-4 text-sm text-[#d8cbbf]">
+          <div>Next step: {progress.nextStep}</div>
+          <div className="mt-2">
+            Candidate profile: {state.candidateProfile ? "available" : "missing"}
+          </div>
+          <div>Job profile: {state.jobProfile ? "available" : "missing"}</div>
+          <div>Insights: {state.insights ? "available" : "missing"}</div>
         </div>
-
-        <Card className="mt-8 p-6">
-          <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">
-            Recommended way to use the MVP
-          </h3>
-          <p className="mt-3 max-w-3xl text-[var(--color-text-secondary)] leading-7">
-            Start with quick tailoring if you want immediate output. Build your
-            canonical profile once you want stronger consistency across multiple
-            applications.
-          </p>
-        </Card>
-      </Section>
-    </main>
+      </AppCard>
+    </div>
   );
 }

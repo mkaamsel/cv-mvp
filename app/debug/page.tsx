@@ -1,160 +1,292 @@
-import Link from "next/link";
-import { supabaseAdmin } from "@/lib/supabase/admin";
+"use client";
 
-type RunRow = {
-  id: string;
-  status: string | null;
-  current_stage: string | null;
-  mode: string | null;
-  output_language: string | null;
-  model_name: string | null;
-  warnings: unknown[] | null;
-  error_text: string | null;
-  duration_ms: number | null;
-  created_at?: string | null;
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+function Section({
+  title,
+  data,
+}: {
+  title: string;
+  data: unknown;
+}) {
+  return (
+    <div
+      style={{
+        background: "#ffffff",
+        borderRadius: 16,
+        padding: 20,
+        marginBottom: 20,
+        border: "1px solid #d1d5db",
+        boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
+      }}
+    >
+      <h2
+        style={{
+          fontSize: 18,
+          fontWeight: 600,
+          marginBottom: 12,
+          color: "#0f172a",
+        }}
+      >
+        {title}
+      </h2>
+
+      <pre
+        style={{
+          background: "#0f172a",
+          color: "#e2e8f0",
+          padding: 16,
+          borderRadius: 10,
+          overflowX: "auto",
+          fontSize: 13,
+          lineHeight: 1.5,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          margin: 0,
+        }}
+      >
+        {JSON.stringify(data, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
+type DebugRunResponse = {
+  runId: string;
+  createdAt: string;
+  status: "ok" | "partial" | "error";
+  warnings?: string[];
+  errors?: string[];
+  steps?: Array<{
+    key: string;
+    status: string;
+    durationMs: number | null;
+  }>;
+  outputs?: {
+    candidateProfile: unknown | null;
+    structuredJob: unknown | null;
+    recommendation: unknown | null;
+    cv: unknown | null;
+    coverLetter: unknown | null;
+    insights: unknown | null;
+  };
 };
 
-function badgeClass(status: string | null) {
-  if (status === "completed" || status === "success") {
-    return "bg-green-100 text-green-800 border-green-200";
+export default function PipelineDebugPage(): React.JSX.Element {
+  const router = useRouter();
+
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<DebugRunResponse | null>(null);
+
+  async function runPipeline() {
+    setSubmitting(true);
+    setError("");
+    setResult(null);
+
+    try {
+      const response = await fetch("/api/debug", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+  candidateDocuments: [
+    {
+      kind: "primary_cv",
+      fileName: "test-cv.txt",
+      text: "Finance professional experienced in IFRS reporting, SAP ECC, revenue accounting, reconciliations and monthly close processes.",
+    },
+  ],
+  jobUrl: "https://example.com/real-job-url",
+  targetLanguage: "English",
+}),
+      });
+
+      const data = (await response.json()) as DebugRunResponse;
+
+      if (!response.ok) {
+        throw new Error(
+          data?.errors?.[0] ||
+            data?.warnings?.[0] ||
+            "Debug pipeline request failed."
+        );
+      }
+
+      setResult(data);
+
+      if (data.runId) {
+        router.push(`/debug/runs/${data.runId}`);
+        return;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
   }
-
-  if (status === "partial" || status === "running") {
-    return "bg-yellow-100 text-yellow-800 border-yellow-200";
-  }
-
-  if (status === "failed") {
-    return "bg-red-100 text-red-800 border-red-200";
-  }
-
-  return "bg-neutral-100 text-neutral-700 border-neutral-200";
-}
-
-function formatDate(value?: string | null) {
-  if (!value) return "—";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return value;
-
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
-}
-
-export default async function DebugRunsPage() {
-  const { data, error } = await supabaseAdmin
-    .from("application_runs")
-    .select(
-      "id, status, current_stage, mode, output_language, model_name, warnings, error_text, duration_ms, created_at"
-    )
-    .order("created_at", { ascending: false })
-    .limit(50);
-
-  if (error) {
-    throw new Error(`Failed to load debug runs: ${error.message}`);
-  }
-
-  const runs = (data ?? []) as RunRow[];
 
   return (
-    <main className="min-h-screen bg-white px-6 py-10 text-neutral-900">
-      <div className="mx-auto max-w-7xl">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h1 className="text-4xl font-semibold tracking-tight">Debug Runs</h1>
-            <p className="mt-3 text-lg text-neutral-600">
-              Internal observability view for recent application generation runs.
-            </p>
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "#f8fafc",
+        padding: "40px 20px",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 1200,
+          margin: "0 auto",
+        }}
+      >
+        <div
+          style={{
+            background: "#ffffff",
+            borderRadius: 20,
+            padding: 24,
+            border: "1px solid #e2e8f0",
+            boxShadow: "0 10px 30px rgba(15, 23, 42, 0.06)",
+            marginBottom: 24,
+          }}
+        >
+          <h1
+            style={{
+              fontSize: 28,
+              fontWeight: 700,
+              margin: 0,
+              color: "#0f172a",
+            }}
+          >
+            Engine Pipeline Debug
+          </h1>
+
+          <p
+            style={{
+              marginTop: 10,
+              marginBottom: 0,
+              fontSize: 15,
+              lineHeight: 1.6,
+              color: "#475569",
+            }}
+          >
+            Run the internal pipeline and inspect one specific execution through
+            the run detail page.
+          </p>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              flexWrap: "wrap",
+              marginTop: 20,
+            }}
+          >
+            <button
+              type="button"
+              onClick={runPipeline}
+              disabled={submitting}
+              style={{
+                padding: "10px 18px",
+                background: submitting ? "#94a3b8" : "#2563eb",
+                color: "#ffffff",
+                borderRadius: 10,
+                border: "none",
+                cursor: submitting ? "not-allowed" : "pointer",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              {submitting ? "Running..." : "Run Pipeline"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => router.push("/debug")}
+              style={{
+                padding: "10px 18px",
+                background: "#ffffff",
+                color: "#0f172a",
+                borderRadius: 10,
+                border: "1px solid #cbd5e1",
+                cursor: "pointer",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              Refresh Debug
+            </button>
           </div>
 
-          <Link
-            href="/test-generate"
-            className="rounded-2xl border border-neutral-300 px-5 py-3 text-sm font-medium text-neutral-800 transition hover:bg-neutral-50"
-          >
-            Back to Test Generate
-          </Link>
+          {error ? (
+            <div
+              style={{
+                marginTop: 16,
+                borderRadius: 12,
+                border: "1px solid #fecaca",
+                background: "#fef2f2",
+                color: "#991b1b",
+                padding: 14,
+                fontSize: 14,
+              }}
+            >
+              {error}
+            </div>
+          ) : null}
         </div>
 
-        <section className="mt-8 rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
-          {runs.length === 0 ? (
-            <div className="rounded-2xl bg-neutral-50 p-6 text-sm text-neutral-600">
-              No runs found.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full border-separate border-spacing-y-3">
-                <thead>
-                  <tr className="text-left text-sm text-neutral-500">
-                    <th className="px-3 py-2 font-medium">Run</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
-                    <th className="px-3 py-2 font-medium">Stage</th>
-                    <th className="px-3 py-2 font-medium">Mode</th>
-                    <th className="px-3 py-2 font-medium">Language</th>
-                    <th className="px-3 py-2 font-medium">Warnings</th>
-                    <th className="px-3 py-2 font-medium">Duration</th>
-                    <th className="px-3 py-2 font-medium">Created</th>
-                    <th className="px-3 py-2 font-medium"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runs.map((run) => {
-                    const warningCount = Array.isArray(run.warnings)
-                      ? run.warnings.length
-                      : 0;
+        {result ? (
+          <>
+            <Section
+              title="Run Summary"
+              data={{
+                runId: result.runId,
+                createdAt: result.createdAt,
+                status: result.status,
+                warnings: result.warnings ?? [],
+                errors: result.errors ?? [],
+                steps: result.steps ?? [],
+              }}
+            />
 
-                    return (
-                      <tr
-                        key={run.id}
-                        className="rounded-2xl border border-neutral-200 bg-neutral-50 text-sm"
-                      >
-                        <td className="px-3 py-4 font-mono text-xs text-neutral-700">
-                          {run.id}
-                        </td>
-                        <td className="px-3 py-4">
-                          <span
-                            className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${badgeClass(
-                              run.status
-                            )}`}
-                          >
-                            {run.status ?? "unknown"}
-                          </span>
-                        </td>
-                        <td className="px-3 py-4 text-neutral-700">
-                          {run.current_stage ?? "—"}
-                        </td>
-                        <td className="px-3 py-4 text-neutral-700">
-                          {run.mode ?? "—"}
-                        </td>
-                        <td className="px-3 py-4 text-neutral-700">
-                          {run.output_language ?? "—"}
-                        </td>
-                        <td className="px-3 py-4 text-neutral-700">
-                          {warningCount}
-                        </td>
-                        <td className="px-3 py-4 text-neutral-700">
-                          {run.duration_ms ?? "—"}
-                        </td>
-                        <td className="px-3 py-4 text-neutral-700">
-                          {formatDate(run.created_at)}
-                        </td>
-                        <td className="px-3 py-4">
-                          <Link
-                            href={`/debug/runs/${run.id}`}
-                            className="rounded-xl border border-neutral-300 px-3 py-2 text-xs font-medium text-neutral-800 transition hover:bg-white"
-                          >
-                            Open
-                          </Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+            {result.outputs?.candidateProfile ? (
+              <Section
+                title="Candidate Profile"
+                data={result.outputs.candidateProfile}
+              />
+            ) : null}
+
+            {result.outputs?.structuredJob ? (
+              <Section
+                title="Structured Job"
+                data={result.outputs.structuredJob}
+              />
+            ) : null}
+
+            {result.outputs?.recommendation ? (
+              <Section
+                title="Application Recommendation"
+                data={result.outputs.recommendation}
+              />
+            ) : null}
+
+            {result.outputs?.cv ? (
+              <Section title="Generated CV" data={result.outputs.cv} />
+            ) : null}
+
+            {result.outputs?.coverLetter ? (
+              <Section
+                title="Generated Cover Letter"
+                data={result.outputs.coverLetter}
+              />
+            ) : null}
+
+            {result.outputs?.insights ? (
+              <Section title="Insights" data={result.outputs.insights} />
+            ) : null}
+          </>
+        ) : null}
       </div>
     </main>
   );

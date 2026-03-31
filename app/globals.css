@@ -1,11 +1,58 @@
 @import "tailwindcss";
 
+:root {
+  --font-sans: Arial, Helvetica, sans-serif;
+
+  --color-background: #F1F6FF;
+  --color-background-soft: #E3EEFF;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #E4F5ED;
+
+  --color-primary: #9EC5FF;
+  --color-primary-hover: #86B6FB;
+  --color-primary-soft: #E3EEFF;
+
+  --color-accent-green: #E4F5ED;
+  --color-accent-yellow: #FFF7D9;
+  --color-accent-purple: #ECE4FF;
+
+  --color-text-primary: #1F2937;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748B;
+  --color-text-on-primary: #10243E;
+
+  --color-border: #D8E4F2;
+  --color-border-soft: #E8EFF7;
+
+  --color-success: #BDE7D0;
+  --color-warning: #F7E7A8;
+  --color-danger: #F3C7C7;
+
+  --color-focus-ring: #9EC5FF;
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 6px 18px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 12px 30px rgba(15, 23, 42, 0.08);
+
+  --space-section: clamp(3rem, 6vw, 5rem);
+  --max-container: 1200px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
 html,
 body {
   margin: 0;
   padding: 0;
   min-height: 100%;
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
   background: var(--color-background);
   color: var(--color-text-primary);
 }
@@ -14,6 +61,22 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
 }
 
 main {
@@ -39,6 +102,19 @@ main {
 .text-muted {
   color: var(--color-text-muted);
 }
+
+.page-shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(158, 197, 255, 0.18), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(228, 245, 237, 0.28), transparent 32%),
+    var(--color-background);
+}
+
+.section {
+  padding-block: var(--space-section);
+}
+
 @keyframes float {
   0% {
     transform: translateY(0px);
