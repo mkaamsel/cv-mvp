@@ -13,8 +13,14 @@ import type {
   WorkspaceCandidateProfile,
   WorkspaceFinalDrafts,
   WorkspaceInsights,
+  WorkspaceInputType,
   WorkspaceJobProfile,
   WorkspaceProgress,
+  WorkspaceRunOutcome,
+  WorkspaceRunTelemetry,
+  WorkspaceStageKey,
+  WorkspaceStageOutcome,
+  WorkspaceStageTelemetry,
   WorkspaceState,
   WorkspaceStepKey,
 } from "@/lib/workspace/types";
@@ -39,6 +45,33 @@ type WorkspaceContextValue = {
   setJobError: (message: string | null) => void;
   setFinalError: (message: string | null) => void;
 
+  startTelemetryRun: (payload: {
+    runId: string;
+    language?: "en" | "de" | null;
+    inputType?: WorkspaceInputType;
+    userGeography?: string | null;
+    jobGeography?: string | null;
+  }) => void;
+
+  updateTelemetryStage: (
+    stage: WorkspaceStageKey,
+    patch: {
+      status?: WorkspaceStageOutcome;
+      warning?: string;
+      error?: string;
+      warnings?: string[];
+      errors?: string[];
+    }
+  ) => void;
+
+  addTelemetryWarning: (message: string) => void;
+  addTelemetryError: (message: string) => void;
+  addDegradedReason: (reason: string) => void;
+  finalizeTelemetryRun: (payload: {
+    outcome: WorkspaceRunOutcome;
+  }) => void;
+  resetTelemetry: () => void;
+
   getStepHref: (step: WorkspaceStepKey) => string;
   resetWorkspace: () => void;
 };
@@ -61,6 +94,45 @@ type ProfileLoadResponse =
 
 const WORKSPACE_STORAGE_KEY = "cvmvp_workspace_state_v1";
 
+const STAGE_ORDER: WorkspaceStageKey[] = [
+  "profile",
+  "jobExtraction",
+  "requiredProfile",
+  "companyContext",
+  "companyResearch",
+  "marketSignals",
+  "recommendation",
+  "generation",
+];
+
+function createEmptyTelemetry(): WorkspaceRunTelemetry {
+  return {
+    runId: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null,
+    language: null,
+    inputType: "unknown",
+    userGeography: null,
+    jobGeography: null,
+    outcome: "pending",
+    degradedReasons: [],
+    warnings: [],
+    errors: [],
+    stages: STAGE_ORDER.map(
+      (stage): WorkspaceStageTelemetry => ({
+        stage,
+        status: "pending",
+        startedAt: null,
+        completedAt: null,
+        durationMs: null,
+        warnings: [],
+        errors: [],
+      })
+    ),
+  };
+}
+
 const initialState: WorkspaceState = {
   candidateProfile: null,
   jobProfile: null,
@@ -78,6 +150,8 @@ const initialState: WorkspaceState = {
   profileError: null,
   jobError: null,
   finalError: null,
+
+  telemetry: null,
 };
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -90,6 +164,102 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function isStageOutcome(value: unknown): value is WorkspaceStageOutcome {
+  return (
+    value === "pending" ||
+    value === "processing" ||
+    value === "success" ||
+    value === "partial" ||
+    value === "error" ||
+    value === "unavailable"
+  );
+}
+
+function isRunOutcome(value: unknown): value is WorkspaceRunOutcome {
+  return (
+    value === "pending" ||
+    value === "completed" ||
+    value === "completed_with_limitations" ||
+    value === "failed"
+  );
+}
+
+function isInputType(value: unknown): value is WorkspaceInputType {
+  return (
+    value === "url_only" ||
+    value === "pasted_text_only" ||
+    value === "url_and_pasted_text" ||
+    value === "unknown"
+  );
+}
+
+function restoreTelemetry(value: unknown): WorkspaceRunTelemetry | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const restoredStages: WorkspaceStageTelemetry[] =
+    Array.isArray(value.stages) && value.stages.length > 0
+      ? value.stages
+          .map((item): WorkspaceStageTelemetry | null => {
+            if (!isRecord(item) || typeof item.stage !== "string") return null;
+
+            const stage = STAGE_ORDER.includes(item.stage as WorkspaceStageKey)
+              ? (item.stage as WorkspaceStageKey)
+              : null;
+
+            if (!stage) return null;
+
+            const status: WorkspaceStageOutcome = isStageOutcome(item.status)
+              ? item.status
+              : "pending";
+
+            return {
+              stage,
+              status,
+              startedAt: typeof item.startedAt === "string" ? item.startedAt : null,
+              completedAt: typeof item.completedAt === "string" ? item.completedAt : null,
+              durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+              warnings: asStringArray(item.warnings),
+              errors: asStringArray(item.errors),
+            };
+          })
+          .filter((item): item is WorkspaceStageTelemetry => item !== null)
+      : [];
+
+  const ensuredStages: WorkspaceStageTelemetry[] = STAGE_ORDER.map((stage) => {
+    const existing = restoredStages.find((item) => item.stage === stage);
+
+    return (
+      existing ?? {
+        stage,
+        status: "pending",
+        startedAt: null,
+        completedAt: null,
+        durationMs: null,
+        warnings: [],
+        errors: [],
+      }
+    );
+  });
+
+  return {
+    runId: typeof value.runId === "string" ? value.runId : null,
+    startedAt: typeof value.startedAt === "string" ? value.startedAt : null,
+    completedAt: typeof value.completedAt === "string" ? value.completedAt : null,
+    durationMs: typeof value.durationMs === "number" ? value.durationMs : null,
+    language: value.language === "en" || value.language === "de" ? value.language : null,
+    inputType: isInputType(value.inputType) ? value.inputType : "unknown",
+    userGeography: typeof value.userGeography === "string" ? value.userGeography : null,
+    jobGeography: typeof value.jobGeography === "string" ? value.jobGeography : null,
+    outcome: isRunOutcome(value.outcome) ? value.outcome : "pending",
+    degradedReasons: asStringArray(value.degradedReasons),
+    warnings: asStringArray(value.warnings),
+    errors: asStringArray(value.errors),
+    stages: ensuredStages,
+  };
 }
 
 function restoreWorkspaceState(input: unknown): WorkspaceState {
@@ -131,6 +301,8 @@ function restoreWorkspaceState(input: unknown): WorkspaceState {
     profileError: typeof input.profileError === "string" ? input.profileError : null,
     jobError: typeof input.jobError === "string" ? input.jobError : null,
     finalError: typeof input.finalError === "string" ? input.finalError : null,
+
+    telemetry: restoreTelemetry(input.telemetry),
   };
 }
 
@@ -139,7 +311,6 @@ function deriveProgress(state: WorkspaceState): WorkspaceProgress {
   const jobReady = !!state.jobProfile;
 
   const insightsReady = !!state.insights || !!state.jobProfile;
-
   const finalReady = profileReady && jobReady;
 
   let nextStep: WorkspaceStepKey = "profile";
@@ -223,6 +394,82 @@ function mergeLoadedWorkspace(
         ? "ready"
         : current.profileStatus,
     profileError: null,
+  };
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function computeDurationMs(startedAt?: string | null, completedAt?: string | null): number | null {
+  if (!startedAt || !completedAt) return null;
+
+  const start = new Date(startedAt).getTime();
+  const end = new Date(completedAt).getTime();
+
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  return Math.max(0, end - start);
+}
+
+function updateStageCollection(
+  telemetry: WorkspaceRunTelemetry,
+  stage: WorkspaceStageKey,
+  patch: {
+    status?: WorkspaceStageOutcome;
+    warning?: string;
+    error?: string;
+    warnings?: string[];
+    errors?: string[];
+  }
+): WorkspaceRunTelemetry {
+  const currentTime = nowIso();
+
+  return {
+    ...telemetry,
+    stages: telemetry.stages.map((item): WorkspaceStageTelemetry => {
+      if (item.stage !== stage) return item;
+
+      const nextStatus: WorkspaceStageOutcome = patch.status ?? item.status;
+
+      const startedAt =
+        item.startedAt || nextStatus === "processing"
+          ? item.startedAt || currentTime
+          : item.startedAt;
+
+      const completedAt =
+        nextStatus === "success" ||
+        nextStatus === "partial" ||
+        nextStatus === "error" ||
+        nextStatus === "unavailable"
+          ? currentTime
+          : item.completedAt;
+
+      const warnings = Array.from(
+        new Set([
+          ...(item.warnings || []),
+          ...(patch.warnings || []),
+          ...(patch.warning ? [patch.warning] : []),
+        ])
+      );
+
+      const errors = Array.from(
+        new Set([
+          ...(item.errors || []),
+          ...(patch.errors || []),
+          ...(patch.error ? [patch.error] : []),
+        ])
+      );
+
+      return {
+        ...item,
+        status: nextStatus,
+        startedAt,
+        completedAt,
+        durationMs: computeDurationMs(startedAt, completedAt),
+        warnings,
+        errors,
+      };
+    }),
   };
 }
 
@@ -445,6 +692,133 @@ export default function WorkspaceProvider({
     }));
   }, []);
 
+  const startTelemetryRun = useCallback(
+    (payload: {
+      runId: string;
+      language?: "en" | "de" | null;
+      inputType?: WorkspaceInputType;
+      userGeography?: string | null;
+      jobGeography?: string | null;
+    }) => {
+      const startedAt = nowIso();
+
+      setState((current) => ({
+        ...current,
+        telemetry: {
+          ...createEmptyTelemetry(),
+          runId: payload.runId,
+          startedAt,
+          language: payload.language ?? null,
+          inputType: payload.inputType ?? "unknown",
+          userGeography: payload.userGeography ?? null,
+          jobGeography: payload.jobGeography ?? null,
+        },
+      }));
+    },
+    []
+  );
+
+  const updateTelemetryStage = useCallback(
+    (
+      stage: WorkspaceStageKey,
+      patch: {
+        status?: WorkspaceStageOutcome;
+        warning?: string;
+        error?: string;
+        warnings?: string[];
+        errors?: string[];
+      }
+    ) => {
+      setState((current) => {
+        const telemetry = current.telemetry ?? createEmptyTelemetry();
+
+        return {
+          ...current,
+          telemetry: updateStageCollection(telemetry, stage, patch),
+        };
+      });
+    },
+    []
+  );
+
+  const addTelemetryWarning = useCallback((message: string) => {
+    if (!message.trim()) return;
+
+    setState((current) => {
+      const telemetry = current.telemetry ?? createEmptyTelemetry();
+
+      return {
+        ...current,
+        telemetry: {
+          ...telemetry,
+          warnings: Array.from(new Set([...telemetry.warnings, message.trim()])),
+        },
+      };
+    });
+  }, []);
+
+  const addTelemetryError = useCallback((message: string) => {
+    if (!message.trim()) return;
+
+    setState((current) => {
+      const telemetry = current.telemetry ?? createEmptyTelemetry();
+
+      return {
+        ...current,
+        telemetry: {
+          ...telemetry,
+          errors: Array.from(new Set([...telemetry.errors, message.trim()])),
+        },
+      };
+    });
+  }, []);
+
+  const addDegradedReason = useCallback((reason: string) => {
+    if (!reason.trim()) return;
+
+    setState((current) => {
+      const telemetry = current.telemetry ?? createEmptyTelemetry();
+
+      return {
+        ...current,
+        telemetry: {
+          ...telemetry,
+          degradedReasons: Array.from(
+            new Set([...telemetry.degradedReasons, reason.trim()])
+          ),
+        },
+      };
+    });
+  }, []);
+
+  const finalizeTelemetryRun = useCallback(
+    (payload: { outcome: WorkspaceRunOutcome }) => {
+      const completedAt = nowIso();
+
+      setState((current) => {
+        const telemetry = current.telemetry ?? createEmptyTelemetry();
+
+        return {
+          ...current,
+          telemetry: {
+            ...telemetry,
+            outcome: payload.outcome,
+            completedAt,
+            durationMs: computeDurationMs(telemetry.startedAt, completedAt),
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const resetTelemetry = useCallback(() => {
+    setState((current) => ({
+      ...current,
+      telemetry: null,
+    }));
+  }, []);
+
   const getStepHref = useCallback((step: WorkspaceStepKey) => {
     return `/workspace/${step}`;
   }, []);
@@ -477,6 +851,13 @@ export default function WorkspaceProvider({
       setProfileError,
       setJobError,
       setFinalError,
+      startTelemetryRun,
+      updateTelemetryStage,
+      addTelemetryWarning,
+      addTelemetryError,
+      addDegradedReason,
+      finalizeTelemetryRun,
+      resetTelemetry,
       getStepHref,
       resetWorkspace,
     }),
@@ -495,6 +876,13 @@ export default function WorkspaceProvider({
       setProfileError,
       setJobError,
       setFinalError,
+      startTelemetryRun,
+      updateTelemetryStage,
+      addTelemetryWarning,
+      addTelemetryError,
+      addDegradedReason,
+      finalizeTelemetryRun,
+      resetTelemetry,
       getStepHref,
       resetWorkspace,
     ]

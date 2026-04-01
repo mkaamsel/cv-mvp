@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { designTokens } from "@/lib/design/tokens";
@@ -16,8 +16,38 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    let active = true;
+
+    async function checkExistingSession() {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!active) return;
+
+        if (session) {
+          router.replace("/profile");
+          return;
+        }
+      } finally {
+        if (active) {
+          setCheckingSession(false);
+        }
+      }
+    }
+
+    void checkExistingSession();
+
+    return () => {
+      active = false;
+    };
+  }, [router, supabase]);
 
   async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -61,6 +91,24 @@ export default function LoginPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (checkingSession) {
+    return (
+      <main
+        style={{
+          minHeight: "100vh",
+          background: t.colors.background,
+          display: "grid",
+          placeItems: "center",
+          padding: "40px 20px",
+          color: t.colors.textSecondary,
+          fontSize: 16,
+        }}
+      >
+        Checking session...
+      </main>
+    );
   }
 
   return (

@@ -126,6 +126,61 @@ const MODEL_PRIORITY = [
   "gpt-4o-mini",
 ].filter(Boolean) as string[];
 
+const POSSESSION_HINTS = [
+  "german",
+  "deutsch",
+  "english",
+  "englisch",
+  "driving licence",
+  "driver's license",
+  "driver license",
+  "führerschein",
+  "class b",
+  "klasse b",
+  "work permit",
+  "arbeitserlaubnis",
+  "steuerberater",
+  "cpa",
+  "acca",
+  "cima",
+  "ifrs",
+  "hgb",
+  "sap",
+  "s/4hana",
+  "s4hana",
+  "certificate",
+  "certification",
+  "certified",
+  "degree",
+  "bachelor",
+  "master",
+  "mba",
+  "licence",
+  "license",
+];
+
+const HARD_BLOCKER_HINTS = [
+  "must have",
+  "required",
+  "requirement",
+  "mandatory",
+  "zwingend",
+  "unbedingt",
+  "erforderlich",
+  "voraussetzung",
+  "must be fluent",
+  "fluent german",
+  "deutschkenntnisse",
+  "steuerberater",
+  "class b",
+  "klasse b",
+  "führerschein",
+  "driving licence",
+  "driver's license",
+  "work permit",
+  "arbeitserlaubnis",
+];
+
 function jsonResponse(
   body: ApplicationRecommendationSuccess | ApplicationRecommendationError,
   status = 200
@@ -311,6 +366,188 @@ function normalizeLocale(body: Partial<ApplicationRecommendationRequest>): "en" 
   return "en";
 }
 
+function uniq(values: string[]): string[] {
+  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)));
+}
+
+function flattenCandidateEvidence(profile: CandidateProfile): string[] {
+  const roleItems = profile.roles.flatMap((role) => [
+    role.title || "",
+    role.company || "",
+    role.location || "",
+    ...role.achievements,
+  ]);
+
+  const languageItems = profile.languages.flatMap((item) => [
+    item.language || "",
+    item.proficiency || "",
+  ]);
+
+  const educationItems = profile.education.flatMap((item) => [
+    item.degree || "",
+    item.field || "",
+    item.institution || "",
+  ]);
+
+  const certificationItems = profile.certifications.flatMap((item) => [
+    item.name || "",
+    item.issuer || "",
+  ]);
+
+  const verifiedItems = profile.verifiedClaims.flatMap((item) => [
+    item.claim || "",
+    ...item.evidence,
+  ]);
+
+  return uniq([
+    profile.headline || "",
+    profile.summary || "",
+    ...roleItems,
+    ...profile.coreSkills,
+    ...profile.tools,
+    ...profile.standards,
+    ...profile.industries,
+    ...languageItems,
+    ...educationItems,
+    ...certificationItems,
+    ...profile.leadershipSignals,
+    ...profile.strengths,
+    ...profile.constraints,
+    ...verifiedItems,
+    ...profile.openQuestions,
+  ]);
+}
+
+function classifyCandidatePossessions(profile: CandidateProfile): string[] {
+  const evidence = flattenCandidateEvidence(profile);
+  const lowerEvidence = evidence.map((item) => item.toLowerCase());
+
+  const detected: string[] = [];
+
+  for (const hint of POSSESSION_HINTS) {
+    if (lowerEvidence.some((item) => item.includes(hint))) {
+      detected.push(hint);
+    }
+  }
+
+  profile.languages.forEach((item) => {
+    if (item.language?.trim()) {
+      detected.push(`language: ${item.language.trim()}${item.proficiency ? ` (${item.proficiency.trim()})` : ""}`);
+    }
+  });
+
+  profile.education.forEach((item) => {
+    const degreeLine = [item.degree, item.field, item.institution]
+      .filter(Boolean)
+      .join(" | ")
+      .trim();
+
+    if (degreeLine) {
+      detected.push(`education: ${degreeLine}`);
+    }
+  });
+
+  profile.certifications.forEach((item) => {
+    const certLine = [item.name, item.issuer].filter(Boolean).join(" | ").trim();
+    if (certLine) {
+      detected.push(`certification: ${certLine}`);
+    }
+  });
+
+  return uniq(detected);
+}
+
+function classifyJobExperienceRequirements(job: StructuredJob): string[] {
+  return uniq([
+    ...job.responsibilities,
+    ...job.requirements.filter((item) => {
+      const lower = item.toLowerCase();
+      return !POSSESSION_HINTS.some((hint) => lower.includes(hint));
+    }),
+  ]);
+}
+
+function classifyJobPossessionRequirements(job: StructuredJob): {
+  mandatory: string[];
+  other: string[];
+} {
+  const mandatory: string[] = [];
+  const other: string[] = [];
+
+  for (const item of job.requirements) {
+    const lower = item.toLowerCase();
+    const looksLikePossession = POSSESSION_HINTS.some((hint) => lower.includes(hint));
+
+    if (!looksLikePossession) continue;
+
+    const isHard = HARD_BLOCKER_HINTS.some((hint) => lower.includes(hint));
+
+    if (isHard) {
+      mandatory.push(item);
+    } else {
+      other.push(item);
+    }
+  }
+
+  return {
+    mandatory: uniq(mandatory),
+    other: uniq(other),
+  };
+}
+
+function buildRecommendationInput(
+  candidateProfile: CandidateProfile,
+  structuredJob: StructuredJob,
+  companyContext: CompanyContext,
+  extractedText: string
+): string {
+  const candidateEvidence = flattenCandidateEvidence(candidateProfile);
+  const candidatePossessions = classifyCandidatePossessions(candidateProfile);
+  const jobExperienceRequirements = classifyJobExperienceRequirements(structuredJob);
+  const jobPossessions = classifyJobPossessionRequirements(structuredJob);
+
+  return `
+RECOMMENDATION TASK INPUT
+
+CANDIDATE PROFILE (FULL JSON)
+${JSON.stringify(candidateProfile, null, 2)}
+
+STRUCTURED JOB (FULL JSON)
+${JSON.stringify(structuredJob, null, 2)}
+
+COMPANY CONTEXT
+${JSON.stringify(companyContext ?? null, null, 2)}
+
+EXTRACTED JOB TEXT
+${extractedText}
+
+CANDIDATE EXPERIENCE / EVIDENCE DIGEST
+${candidateEvidence.length ? `- ${candidateEvidence.join("\n- ")}` : "- none"}
+
+CANDIDATE POSSESSIONS DIGEST
+${candidatePossessions.length ? `- ${candidatePossessions.join("\n- ")}` : "- none clearly evidenced"}
+
+ROLE EXPERIENCE REQUIREMENTS
+${jobExperienceRequirements.length ? `- ${jobExperienceRequirements.join("\n- ")}` : "- none clearly extracted"}
+
+ROLE POSSESSIONS REQUIREMENTS
+Mandatory / likely blockers:
+${jobPossessions.mandatory.length ? `- ${jobPossessions.mandatory.join("\n- ")}` : "- none clearly extracted"}
+
+Other possession-type asks:
+${jobPossessions.other.length ? `- ${jobPossessions.other.join("\n- ")}` : "- none clearly extracted"}
+
+STRICT EVALUATION RULES
+1. Separate experience from possessions.
+2. A missing or not-evidenced mandatory possession must NOT be treated like a normal skill gap.
+3. Mandatory possessions can include language, degree, licence, certification, work permit, Steuerberater, Class B driving licence, or similar operational/legal qualifications.
+4. If something is not found in the candidate evidence, prefer "not evidenced" logic rather than inventing it.
+5. Strong matches should be presented strongly when reinforced by both experience and possession, for example SAP experience plus SAP certification.
+6. The system is a mentor and guide, not a rejection bot and not a bootlicker.
+7. Even in weak cases, advice should remain constructive and calm.
+`.trim();
+}
+
 export async function POST(request: Request): Promise<Response> {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -361,19 +598,12 @@ export async function POST(request: Request): Promise<Response> {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    const inputText = `
-Candidate profile:
-${JSON.stringify(body.candidateProfile, null, 2)}
-
-Structured job:
-${JSON.stringify(body.structuredJob, null, 2)}
-
-Company context:
-${JSON.stringify(body.companyContext ?? null, null, 2)}
-
-Extracted job text:
-${typeof body.extractedText === "string" ? body.extractedText.trim() : ""}
-`.trim();
+    const inputText = buildRecommendationInput(
+      body.candidateProfile,
+      body.structuredJob,
+      body.companyContext ?? null,
+      typeof body.extractedText === "string" ? body.extractedText.trim() : ""
+    );
 
     const { response, modelUsed } = await callModelWithFallback(
       client,

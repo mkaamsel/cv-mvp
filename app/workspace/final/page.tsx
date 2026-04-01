@@ -4,6 +4,7 @@ import { type CSSProperties } from "react";
 import Link from "next/link";
 import AppCard from "@/components/ui/AppCard";
 import SectionLabel from "@/components/ui/SectionLabel";
+import FeedbackStars from "@/components/feedback/FeedbackStars";
 import { useWorkspace } from "@/components/workspace/WorkspaceProvider";
 import { designTokens } from "@/lib/design/tokens";
 
@@ -229,6 +230,15 @@ export default function WorkspaceFinalPage() {
           <SummaryPill label={`Status: ${finalDrafts ? "Ready" : "Pending"}`} />
           {runId ? <SummaryPill label={`Run ID: ${runId}`} /> : null}
         </div>
+
+        {finalDrafts ? (
+          <FeedbackStars
+  runId={runId}
+  stage="final_documents"
+  prompt={outputLanguage === "German" ? "Diesen Schritt bewerten" : "Rate this step"}
+  locale={outputLanguage === "German" ? "de" : "en"}
+/>
+        ) : null}
       </AppCard>
 
       {!finalDrafts ? (

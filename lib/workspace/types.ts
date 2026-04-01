@@ -126,6 +126,80 @@ export type WorkspaceFinalDrafts = {
   rawResponse?: unknown;
 };
 
+export type WorkspaceStepKey =
+  | "profile"
+  | "job"
+  | "final"
+  | "insights";
+
+export type WorkspaceProgress = {
+  profileReady: boolean;
+  jobReady: boolean;
+  insightsReady: boolean;
+  finalReady: boolean;
+  nextStep: WorkspaceStepKey;
+};
+
+export type WorkspaceStageKey =
+  | "profile"
+  | "jobExtraction"
+  | "requiredProfile"
+  | "companyContext"
+  | "companyResearch"
+  | "marketSignals"
+  | "recommendation"
+  | "generation";
+
+export type WorkspaceStageOutcome =
+  | "pending"
+  | "processing"
+  | "success"
+  | "partial"
+  | "error"
+  | "unavailable";
+
+export type WorkspaceRunOutcome =
+  | "pending"
+  | "completed"
+  | "completed_with_limitations"
+  | "failed";
+
+export type WorkspaceInputType =
+  | "url_only"
+  | "pasted_text_only"
+  | "url_and_pasted_text"
+  | "unknown";
+
+export type WorkspaceStageTelemetry = {
+  stage: WorkspaceStageKey;
+  status: WorkspaceStageOutcome;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  warnings?: string[];
+  errors?: string[];
+};
+
+export type WorkspaceRunTelemetry = {
+  runId: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+
+  language: "en" | "de" | null;
+  inputType: WorkspaceInputType;
+
+  userGeography?: string | null;
+  jobGeography?: string | null;
+
+  outcome: WorkspaceRunOutcome;
+  degradedReasons: string[];
+  warnings: string[];
+  errors: string[];
+
+  stages: WorkspaceStageTelemetry[];
+};
+
 export type WorkspaceState = {
   candidateProfile: WorkspaceCandidateProfile | null;
   jobProfile: WorkspaceJobProfile | null;
@@ -143,18 +217,6 @@ export type WorkspaceState = {
   profileError: string | null;
   jobError: string | null;
   finalError: string | null;
-};
 
-export type WorkspaceStepKey =
-  | "profile"
-  | "job"
-  | "final"
-  | "insights";
-
-export type WorkspaceProgress = {
-  profileReady: boolean;
-  jobReady: boolean;
-  insightsReady: boolean;
-  finalReady: boolean;
-  nextStep: WorkspaceStepKey;
+  telemetry: WorkspaceRunTelemetry | null;
 };

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import FeedbackStars from "@/components/feedback/FeedbackStars";
 import { designTokens } from "@/lib/design/tokens";
 
 const t = designTokens;
@@ -1142,6 +1143,15 @@ export default function ProfilePage(): React.JSX.Element {
                   ) : (
                     <EmptyState text="No evidence-backed claims stored yet." />
                   )}
+
+                  <div style={{ marginTop: 14 }}>
+                    <FeedbackStars
+  runId={workspaceLoadedAt || "profile-stage"}
+  stage="profile_build"
+  prompt={locale === "de" ? "Diesen Schritt bewerten" : "Rate this step"}
+  locale={locale}
+/>
+                  </div>
                 </ProfilePanel>
               </div>
             </div>

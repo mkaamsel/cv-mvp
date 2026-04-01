@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import FeedbackStars from "@/components/feedback/FeedbackStars";
 import { useWorkspace } from "@/components/workspace/WorkspaceProvider";
 import type {
   WorkspaceCandidateProfile,
@@ -99,6 +100,31 @@ type GenerateCoverLetterResponse = {
   coverLetterDraft?: string;
   result?: string;
   error?: string;
+};
+
+type PersistTailoringRunPayload = {
+  clientRunId: string;
+  jobUrl?: string;
+  jobDescriptionInput?: string;
+  normalizedUrl?: string;
+  outputLanguage?: string;
+  structuredJobJson?: Record<string, unknown> | null;
+  extractedText?: string;
+  extractionSource?: string;
+  warningsJson?: string[];
+  companyContextJson?: Record<string, unknown> | null;
+  marketSignalsJson?: Record<string, unknown> | null;
+  companyResearchJson?: Record<string, unknown> | null;
+  applicationRecommendationJson?: Record<string, unknown> | null;
+  finalCvText?: string;
+  finalCoverLetterText?: string;
+  inputType?: string;
+  runOutcome?: string;
+  degradedReasonsJson?: string[];
+  telemetryJson?: Record<string, unknown> | null;
+  stageStatusesJson?: Record<string, unknown> | null;
+  stageDurationsJson?: Record<string, unknown> | null;
+  jobGeography?: string | null;
 };
 
 type LayerState = "idle" | "processing" | "ready" | "warning" | "error";
@@ -286,6 +312,101 @@ function ResultCard({
   );
 }
 
+function getProgressLabel(layerStates: { label: string; state: LayerState }[], loading: boolean) {
+  if (!loading) {
+    const hasRecommendation = layerStates.some(
+      (layer) => layer.label === "CP8" && layer.state === "ready"
+    );
+
+    if (hasRecommendation) {
+      return "Analysis complete";
+    }
+
+    return "Ready to analyse";
+  }
+
+  const processingLayer = layerStates.find((layer) => layer.state === "processing");
+
+  switch (processingLayer?.label) {
+    case "CP1":
+      return "Checking candidate profile";
+    case "CP2":
+      return "Extracting the role";
+    case "CP3":
+      return "Interpreting requirements";
+    case "CP4":
+      return "Assessing company context";
+    case "CP5":
+      return "Preparing company research";
+    case "CP6":
+      return "Reading market signals";
+    case "CP7":
+      return "Comparing profile to role";
+    case "CP8":
+      return "Finalising recommendation";
+    default:
+      return "Analysing role";
+  }
+}
+
+function getProgressPercent(layerStates: { label: string; state: LayerState }[], loading: boolean) {
+  const completed = layerStates.filter((layer) => layer.state === "ready").length;
+  const processing = layerStates.some((layer) => layer.state === "processing") ? 0.5 : 0;
+  const total = layerStates.length || 1;
+
+  if (!loading && completed === 0) return 0;
+
+  return Math.min(100, Math.round(((completed + processing) / total) * 100));
+}
+
+function inferInputType(jobUrl: string, jobText: string): "url_only" | "pasted_text_only" | "url_and_pasted_text" | "unknown" {
+  const hasUrl = Boolean(jobUrl.trim());
+  const hasText = Boolean(jobText.trim());
+
+  if (hasUrl && hasText) return "url_and_pasted_text";
+  if (hasUrl) return "url_only";
+  if (hasText) return "pasted_text_only";
+  return "unknown";
+}
+
+function safeObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function buildStageStatusMap(telemetry: unknown): Record<string, unknown> {
+  const stages =
+    telemetry &&
+    typeof telemetry === "object" &&
+    Array.isArray((telemetry as { stages?: unknown[] }).stages)
+      ? (telemetry as { stages: Array<{ stage?: string; status?: string }> }).stages
+      : [];
+
+  return stages.reduce<Record<string, unknown>>((acc, item) => {
+    if (item.stage) {
+      acc[item.stage] = item.status ?? "pending";
+    }
+    return acc;
+  }, {});
+}
+
+function buildStageDurationMap(telemetry: unknown): Record<string, unknown> {
+  const stages =
+    telemetry &&
+    typeof telemetry === "object" &&
+    Array.isArray((telemetry as { stages?: unknown[] }).stages)
+      ? (telemetry as { stages: Array<{ stage?: string; durationMs?: number | null }> }).stages
+      : [];
+
+  return stages.reduce<Record<string, unknown>>((acc, item) => {
+    if (item.stage) {
+      acc[item.stage] = item.durationMs ?? null;
+    }
+    return acc;
+  }, {});
+}
+
 export default function WorkspaceJobPage() {
   const router = useRouter();
 
@@ -299,6 +420,12 @@ export default function WorkspaceJobPage() {
     setFinalDrafts,
     setFinalStatus,
     setFinalError,
+    startTelemetryRun,
+    updateTelemetryStage,
+    addTelemetryWarning,
+    addTelemetryError,
+    addDegradedReason,
+    finalizeTelemetryRun,
   } = useWorkspace();
 
   const [jobUrl, setJobUrl] = useState(state.jobUrl || "");
@@ -381,6 +508,16 @@ export default function WorkspaceJobPage() {
     return () => clearInterval(interval);
   }, [loading]);
 
+  async function persistTailoringRun(payload: PersistTailoringRunPayload) {
+    await fetch("/api/tailoring-runs", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  }
+
   async function runJobStep() {
     setLoading(true);
     setJobError(null);
@@ -397,13 +534,41 @@ export default function WorkspaceJobPage() {
     const runId = createRunId();
     setCurrentRunId(runId);
 
-    try {
-      const outputLanguage: "de" | "en" = language === "DE" ? "de" : "en";
+    const outputLanguage: "de" | "en" = language === "DE" ? "de" : "en";
+    const inputType = inferInputType(jobUrl, jobDescription);
 
+    startTelemetryRun({
+      runId,
+      language: outputLanguage,
+      inputType,
+      jobGeography: null,
+      userGeography: null,
+    });
+
+    updateTelemetryStage("profile", {
+      status: candidateProfile ? "success" : "partial",
+    });
+
+    if (!candidateProfile) {
+      addDegradedReason("candidate_profile_missing");
+      addTelemetryWarning("Candidate profile missing at run start.");
+    }
+
+    let persistedStructuredJob: TailoringExtractResponse | null = null;
+    let persistedCompanyContext: CompanyContext | null = null;
+    let persistedMarketSignals: Record<string, unknown> | null = null;
+    let persistedCompanyResearch: Record<string, unknown> | null = null;
+    let persistedRecommendation: ApplicationRecommendationResponse | null = null;
+    let persistedFinalCv = "";
+    let persistedFinalCoverLetter = "";
+
+    try {
       setJobInput({
         jobUrl: jobUrl.trim(),
         jobText: jobDescription.trim(),
       });
+
+      updateTelemetryStage("jobExtraction", { status: "processing" });
 
       const response = await fetch("/api/extract-job", {
         method: "POST",
@@ -418,11 +583,33 @@ export default function WorkspaceJobPage() {
       });
 
       const data = (await response.json()) as TailoringExtractResponse;
+      persistedStructuredJob = data;
 
       if (!response.ok) {
+        updateTelemetryStage("jobExtraction", {
+          status: "error",
+          error: data.error || "Job extraction failed.",
+        });
+        addTelemetryError(data.error || "Job analysis failed.");
         setJobError(data.error || "Job analysis failed.");
         setJobStatus("error");
         setFinalStatus("idle");
+        finalizeTelemetryRun({ outcome: "failed" });
+
+        await persistTailoringRun({
+          clientRunId: runId,
+          jobUrl: jobUrl.trim(),
+          jobDescriptionInput: jobDescription.trim(),
+          outputLanguage,
+          inputType,
+          runOutcome: "failed",
+          degradedReasonsJson: state.telemetry?.degradedReasons || ["job_extraction_failed"],
+          telemetryJson: safeObject(state.telemetry),
+          stageStatusesJson: buildStageStatusMap(state.telemetry),
+          stageDurationsJson: buildStageDurationMap(state.telemetry),
+          warningsJson: data.warnings || [],
+        });
+
         return;
       }
 
@@ -444,6 +631,22 @@ export default function WorkspaceJobPage() {
         rawResponse: data,
       };
 
+      if (normalizedJobProfile.warnings?.length) {
+        normalizedJobProfile.warnings.forEach((warning) => addTelemetryWarning(warning));
+      }
+
+      if (data.source === "blocked-or-thin-content") {
+        addDegradedReason("weak_url_extraction");
+        updateTelemetryStage("jobExtraction", {
+          status: "partial",
+          warning: "Blocked or thin content; fallback extraction used.",
+        });
+      } else {
+        updateTelemetryStage("jobExtraction", { status: "success" });
+      }
+
+      updateTelemetryStage("requiredProfile", { status: "success" });
+
       setStructuredJob(normalizedJobProfile);
       setJobProfile(normalizedJobProfile);
 
@@ -456,6 +659,8 @@ export default function WorkspaceJobPage() {
       }
 
       let resolvedCompanyContext: CompanyContext | null = null;
+
+      updateTelemetryStage("companyContext", { status: "processing" });
 
       try {
         const companyContextResponse = await fetch("/api/company-context", {
@@ -475,23 +680,37 @@ export default function WorkspaceJobPage() {
 
         if (companyContextResponse.ok && companyContextData.ok) {
           resolvedCompanyContext = companyContextData.companyContext;
+          persistedCompanyContext = resolvedCompanyContext;
           setCompanyContextText(stringifyCompanyContext(resolvedCompanyContext));
+          updateTelemetryStage("companyContext", { status: "success" });
         } else {
-        setCompanyContextText(
-  JSON.stringify(
-    {
-      error:
-        !companyContextData.ok
-          ? companyContextData.error
-          : "Company context failed.",
-    },
-    null,
-    2
-  )
-
+          addDegradedReason("company_context_unavailable");
+          updateTelemetryStage("companyContext", {
+            status: "unavailable",
+            warning:
+              !companyContextData.ok
+                ? companyContextData.error
+                : "Company context failed.",
+          });
+          setCompanyContextText(
+            JSON.stringify(
+              {
+                error:
+                  !companyContextData.ok
+                    ? companyContextData.error
+                    : "Company context failed.",
+              },
+              null,
+              2
+            )
           );
         }
       } catch {
+        addDegradedReason("company_context_unavailable");
+        updateTelemetryStage("companyContext", {
+          status: "unavailable",
+          warning: "Company context request failed.",
+        });
         setCompanyContextText(
           JSON.stringify(
             {
@@ -504,6 +723,8 @@ export default function WorkspaceJobPage() {
       }
 
       let resolvedMarketSignals: Record<string, unknown> | null = null;
+
+      updateTelemetryStage("marketSignals", { status: "processing" });
 
       try {
         const marketSignalsResponse = await fetch("/api/market-signals", {
@@ -523,10 +744,17 @@ export default function WorkspaceJobPage() {
 
         if (marketSignalsResponse.ok && marketSignalsData?.ok) {
           resolvedMarketSignals = marketSignalsData.marketSignals || null;
+          persistedMarketSignals = resolvedMarketSignals;
           setMarketSignalsText(
             JSON.stringify(marketSignalsData.marketSignals, null, 2)
           );
+          updateTelemetryStage("marketSignals", { status: "success" });
         } else {
+          addDegradedReason("market_signals_unavailable");
+          updateTelemetryStage("marketSignals", {
+            status: "unavailable",
+            warning: marketSignalsData?.error || "Market signals failed.",
+          });
           setMarketSignalsText(
             JSON.stringify(
               {
@@ -538,6 +766,11 @@ export default function WorkspaceJobPage() {
           );
         }
       } catch {
+        addDegradedReason("market_signals_unavailable");
+        updateTelemetryStage("marketSignals", {
+          status: "unavailable",
+          warning: "Market signals request failed.",
+        });
         setMarketSignalsText(
           JSON.stringify(
             {
@@ -550,6 +783,8 @@ export default function WorkspaceJobPage() {
       }
 
       let resolvedCompanyResearch: Record<string, unknown> | null = null;
+
+      updateTelemetryStage("companyResearch", { status: "processing" });
 
       try {
         const companyResearchResponse = await fetch("/api/company-research", {
@@ -569,10 +804,17 @@ export default function WorkspaceJobPage() {
 
         if (companyResearchResponse.ok && companyResearchData?.ok) {
           resolvedCompanyResearch = companyResearchData.companyResearch || null;
+          persistedCompanyResearch = resolvedCompanyResearch;
           setCompanyResearchText(
             JSON.stringify(companyResearchData.companyResearch, null, 2)
           );
+          updateTelemetryStage("companyResearch", { status: "success" });
         } else {
+          addDegradedReason("company_research_unavailable");
+          updateTelemetryStage("companyResearch", {
+            status: "unavailable",
+            warning: companyResearchData?.error || "Company research failed.",
+          });
           setCompanyResearchText(
             JSON.stringify(
               {
@@ -584,6 +826,11 @@ export default function WorkspaceJobPage() {
           );
         }
       } catch {
+        addDegradedReason("company_research_unavailable");
+        updateTelemetryStage("companyResearch", {
+          status: "unavailable",
+          warning: "Company research request failed.",
+        });
         setCompanyResearchText(
           JSON.stringify(
             {
@@ -596,6 +843,8 @@ export default function WorkspaceJobPage() {
       }
 
       let recommendationData: ApplicationRecommendationResponse | null = null;
+
+      updateTelemetryStage("recommendation", { status: "processing" });
 
       if (candidateProfile) {
         const recommendationResponse = await fetch(
@@ -621,7 +870,27 @@ export default function WorkspaceJobPage() {
         recommendationData =
           (await recommendationResponse.json()) as ApplicationRecommendationResponse;
 
+        persistedRecommendation = recommendationData;
         setApplicationRecommendation(recommendationData);
+
+        if (recommendationResponse.ok && recommendationData.ok) {
+          updateTelemetryStage("recommendation", { status: "success" });
+        } else {
+          addDegradedReason("recommendation_partial");
+          updateTelemetryStage("recommendation", {
+            status: "partial",
+            warning:
+              !recommendationData.ok
+                ? recommendationData.error
+                : "Recommendation incomplete.",
+          });
+        }
+      } else {
+        addDegradedReason("candidate_profile_missing");
+        updateTelemetryStage("recommendation", {
+          status: "partial",
+          warning: "Candidate profile missing; recommendation skipped.",
+        });
       }
 
       const normalizedInsights: WorkspaceInsights = {
@@ -690,9 +959,42 @@ export default function WorkspaceJobPage() {
       setJobStatus("ready");
       setJobError(null);
 
+      updateTelemetryStage("generation", { status: "processing" });
+
       if (!candidateProfile) {
+        addDegradedReason("candidate_profile_missing");
+        updateTelemetryStage("generation", {
+          status: "partial",
+          warning: "Candidate profile missing. Generation not completed.",
+        });
         setFinalError("Candidate profile is missing. Please rebuild the profile first.");
         setFinalStatus("error");
+
+        finalizeTelemetryRun({ outcome: "completed_with_limitations" });
+
+        await persistTailoringRun({
+          clientRunId: runId,
+          jobUrl: jobUrl.trim(),
+          jobDescriptionInput: jobDescription.trim(),
+          normalizedUrl: data.normalizedUrl || "",
+          outputLanguage,
+          structuredJobJson: safeObject(data.structuredJob),
+          extractedText: data.extractedText || "",
+          extractionSource: data.source || "pasted-text",
+          warningsJson: data.warnings || [],
+          companyContextJson: safeObject(resolvedCompanyContext),
+          marketSignalsJson: resolvedMarketSignals,
+          companyResearchJson: resolvedCompanyResearch,
+          applicationRecommendationJson: safeObject(recommendationData),
+          inputType,
+          runOutcome: "completed_with_limitations",
+          degradedReasonsJson: ["candidate_profile_missing"],
+          telemetryJson: safeObject(state.telemetry),
+          stageStatusesJson: buildStageStatusMap(state.telemetry),
+          stageDurationsJson: buildStageDurationMap(state.telemetry),
+          jobGeography: data.structuredJob.location || null,
+        });
+
         return;
       }
 
@@ -713,8 +1015,39 @@ export default function WorkspaceJobPage() {
       const cvData = (await cvResponse.json()) as GenerateCvResponse;
 
       if (!cvResponse.ok) {
+        addDegradedReason("generation_failed");
+        updateTelemetryStage("generation", {
+          status: "error",
+          error: cvData.error || "CV generation failed.",
+        });
+        addTelemetryError(cvData.error || "CV generation failed.");
         setFinalError(cvData.error || "CV generation failed.");
         setFinalStatus("error");
+        finalizeTelemetryRun({ outcome: "failed" });
+
+        await persistTailoringRun({
+          clientRunId: runId,
+          jobUrl: jobUrl.trim(),
+          jobDescriptionInput: jobDescription.trim(),
+          normalizedUrl: data.normalizedUrl || "",
+          outputLanguage,
+          structuredJobJson: safeObject(data.structuredJob),
+          extractedText: data.extractedText || "",
+          extractionSource: data.source || "pasted-text",
+          warningsJson: data.warnings || [],
+          companyContextJson: safeObject(resolvedCompanyContext),
+          marketSignalsJson: resolvedMarketSignals,
+          companyResearchJson: resolvedCompanyResearch,
+          applicationRecommendationJson: safeObject(recommendationData),
+          inputType,
+          runOutcome: "failed",
+          degradedReasonsJson: ["generation_failed"],
+          telemetryJson: safeObject(state.telemetry),
+          stageStatusesJson: buildStageStatusMap(state.telemetry),
+          stageDurationsJson: buildStageDurationMap(state.telemetry),
+          jobGeography: data.structuredJob.location || null,
+        });
+
         return;
       }
 
@@ -736,14 +1069,66 @@ export default function WorkspaceJobPage() {
         (await coverLetterResponse.json()) as GenerateCoverLetterResponse;
 
       if (!coverLetterResponse.ok) {
+        addDegradedReason("generation_failed");
+        updateTelemetryStage("generation", {
+          status: "error",
+          error: coverLetterData.error || "Cover letter generation failed.",
+        });
+        addTelemetryError(coverLetterData.error || "Cover letter generation failed.");
         setFinalError(coverLetterData.error || "Cover letter generation failed.");
         setFinalStatus("error");
+        finalizeTelemetryRun({ outcome: "failed" });
+
+        await persistTailoringRun({
+          clientRunId: runId,
+          jobUrl: jobUrl.trim(),
+          jobDescriptionInput: jobDescription.trim(),
+          normalizedUrl: data.normalizedUrl || "",
+          outputLanguage,
+          structuredJobJson: safeObject(data.structuredJob),
+          extractedText: data.extractedText || "",
+          extractionSource: data.source || "pasted-text",
+          warningsJson: data.warnings || [],
+          companyContextJson: safeObject(resolvedCompanyContext),
+          marketSignalsJson: resolvedMarketSignals,
+          companyResearchJson: resolvedCompanyResearch,
+          applicationRecommendationJson: safeObject(recommendationData),
+          finalCvText: cvData.cvDraft || cvData.result || "",
+          inputType,
+          runOutcome: "failed",
+          degradedReasonsJson: ["generation_failed"],
+          telemetryJson: safeObject(state.telemetry),
+          stageStatusesJson: buildStageStatusMap(state.telemetry),
+          stageDurationsJson: buildStageDurationMap(state.telemetry),
+          jobGeography: data.structuredJob.location || null,
+        });
+
         return;
       }
 
       const finalCv = cvData.cvDraft || cvData.result || "";
       const finalCoverLetter =
         coverLetterData.coverLetterDraft || coverLetterData.result || "";
+
+      persistedFinalCv = finalCv;
+      persistedFinalCoverLetter = finalCoverLetter;
+
+      updateTelemetryStage("generation", { status: "success" });
+
+      const hasLimitations =
+        Boolean(
+          resolvedCompanyContext == null ||
+            resolvedMarketSignals == null ||
+            resolvedCompanyResearch == null ||
+            !recommendationData ||
+            !recommendationData.ok
+        );
+
+      if (hasLimitations) {
+        finalizeTelemetryRun({ outcome: "completed_with_limitations" });
+      } else {
+        finalizeTelemetryRun({ outcome: "completed" });
+      }
 
       setFinalDrafts({
         cvDraft: finalCv,
@@ -768,12 +1153,69 @@ export default function WorkspaceJobPage() {
 
       setFinalStatus("ready");
       setFinalError(null);
+
+      await persistTailoringRun({
+        clientRunId: runId,
+        jobUrl: jobUrl.trim(),
+        jobDescriptionInput: jobDescription.trim(),
+        normalizedUrl: data.normalizedUrl || "",
+        outputLanguage,
+        structuredJobJson: safeObject(data.structuredJob),
+        extractedText: data.extractedText || "",
+        extractionSource: data.source || "pasted-text",
+        warningsJson: data.warnings || [],
+        companyContextJson: safeObject(resolvedCompanyContext),
+        marketSignalsJson: resolvedMarketSignals,
+        companyResearchJson: resolvedCompanyResearch,
+        applicationRecommendationJson: safeObject(recommendationData),
+        finalCvText: finalCv,
+        finalCoverLetterText: finalCoverLetter,
+        inputType,
+        runOutcome: hasLimitations ? "completed_with_limitations" : "completed",
+        degradedReasonsJson: state.telemetry?.degradedReasons || [],
+        telemetryJson: safeObject(state.telemetry),
+        stageStatusesJson: buildStageStatusMap(state.telemetry),
+        stageDurationsJson: buildStageDurationMap(state.telemetry),
+        jobGeography: data.structuredJob.location || null,
+      });
+
       router.push("/workspace/final");
     } catch (err) {
       console.error(err);
+      addTelemetryError("Request failed.");
       setJobError("Request failed.");
       setJobStatus("error");
       setFinalStatus("error");
+      finalizeTelemetryRun({ outcome: "failed" });
+
+      try {
+        await persistTailoringRun({
+          clientRunId: runId,
+          jobUrl: jobUrl.trim(),
+          jobDescriptionInput: jobDescription.trim(),
+          normalizedUrl: persistedStructuredJob?.normalizedUrl || "",
+          outputLanguage,
+          structuredJobJson: safeObject(persistedStructuredJob?.structuredJob),
+          extractedText: persistedStructuredJob?.extractedText || "",
+          extractionSource: persistedStructuredJob?.source || "pasted-text",
+          warningsJson: persistedStructuredJob?.warnings || [],
+          companyContextJson: safeObject(persistedCompanyContext),
+          marketSignalsJson: persistedMarketSignals,
+          companyResearchJson: persistedCompanyResearch,
+          applicationRecommendationJson: safeObject(persistedRecommendation),
+          finalCvText: persistedFinalCv,
+          finalCoverLetterText: persistedFinalCoverLetter,
+          inputType,
+          runOutcome: "failed",
+          degradedReasonsJson: state.telemetry?.degradedReasons || ["unexpected_request_failure"],
+          telemetryJson: safeObject(state.telemetry),
+          stageStatusesJson: buildStageStatusMap(state.telemetry),
+          stageDurationsJson: buildStageDurationMap(state.telemetry),
+          jobGeography: persistedStructuredJob?.structuredJob.location || null,
+        });
+      } catch {
+        // ignore persistence failure here
+      }
     } finally {
       setLoading(false);
       setProgressStep("");
@@ -785,79 +1227,99 @@ export default function WorkspaceJobPage() {
   }, [candidateProfile]);
 
   const layerStates = useMemo(() => {
-  const profile: LayerState =
-    candidateProfile ? "ready" : "idle";
+    const profile: LayerState = candidateProfile ? "ready" : "idle";
 
-  const job: LayerState =
-    loading
+    const job: LayerState = loading
       ? "processing"
       : structuredJob
-      ? "ready"
-      : "idle";
+        ? "ready"
+        : "idle";
 
-  const requiredProfile: LayerState =
-    loading
+    const requiredProfile: LayerState = loading
       ? "processing"
       : structuredJob
-      ? "idle"
-      : "idle";
+        ? "ready"
+        : "idle";
 
-  const companyContext: LayerState =
-    loading
+    const companyContext: LayerState = loading
       ? "processing"
       : companyContextText
-      ? !companyContextText.includes('"error"')
-        ? "ready"
-        : "error"
-      : structuredJob
-      ? "idle"
-      : "idle";
+        ? !companyContextText.includes('"error"')
+          ? "ready"
+          : "error"
+        : structuredJob
+          ? "idle"
+          : "idle";
 
-  const companyResearch: LayerState =
-    loading
+    const companyResearch: LayerState = loading
       ? "processing"
-      : "idle";
+      : companyResearchText
+        ? !companyResearchText.includes('"error"')
+          ? "ready"
+          : "error"
+        : structuredJob
+          ? "idle"
+          : "idle";
 
-  const marketSignals: LayerState =
-    loading
+    const marketSignals: LayerState = loading
       ? "processing"
-      : "idle";
+      : marketSignalsText
+        ? !marketSignalsText.includes('"error"')
+          ? "ready"
+          : "error"
+        : structuredJob
+          ? "idle"
+          : "idle";
 
-  const fit: LayerState =
-    loading
+    const fit: LayerState = loading
       ? "processing"
       : applicationRecommendation
-      ? "ready"
-      : structuredJob && candidateProfile
-      ? "idle"
-      : "idle";
+        ? applicationRecommendation.ok
+          ? "ready"
+          : "warning"
+        : structuredJob && candidateProfile
+          ? "idle"
+          : "idle";
 
-  const recommendation: LayerState =
-    loading
+    const recommendation: LayerState = loading
       ? "processing"
       : applicationRecommendation
-      ? "ready"
-      : structuredJob && candidateProfile
-      ? "idle"
-      : "idle";
+        ? applicationRecommendation.ok
+          ? "ready"
+          : "warning"
+        : structuredJob && candidateProfile
+          ? "idle"
+          : "idle";
 
-  return [
-    { label: "Can. Prfl", state: profile },
-    { label: "Strct. Job", state: job },
-    { label: "Req Prfl", state: requiredProfile },
-    { label: "Com. Context", state: companyContext },
-    { label: "Com. Res.", state: companyResearch },
-    { label: "Mkt. Sgnl.", state: marketSignals },
-    { label: "Fit", state: fit },
-    { label: "Recmm", state: recommendation },
-  ];
-}, [
-  candidateProfile,
-  structuredJob,
-  companyContextText,
-  applicationRecommendation,
-  loading,
-]);
+    return [
+      { label: "CP1", state: profile },
+      { label: "CP2", state: job },
+      { label: "CP3", state: requiredProfile },
+      { label: "CP4", state: companyContext },
+      { label: "CP5", state: companyResearch },
+      { label: "CP6", state: marketSignals },
+      { label: "CP7", state: fit },
+      { label: "CP8", state: recommendation },
+    ];
+  }, [
+    candidateProfile,
+    structuredJob,
+    companyContextText,
+    companyResearchText,
+    marketSignalsText,
+    applicationRecommendation,
+    loading,
+  ]);
+
+  const progressLabel = useMemo(
+    () => getProgressLabel(layerStates, loading),
+    [layerStates, loading]
+  );
+
+  const progressPercent = useMemo(
+    () => getProgressPercent(layerStates, loading),
+    [layerStates, loading]
+  );
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 lg:px-6">
@@ -876,54 +1338,27 @@ export default function WorkspaceJobPage() {
                 className="mt-8 text-xs font-semibold uppercase tracking-[0.35em] text-slate-700"
                 style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
               >
-                Job
+                Analyse the role
               </div>
             </div>
           </aside>
 
           <section className="space-y-6">
-            <div className="rounded-3xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
-              <div className="flex flex-col gap-5">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
-                      Guided application workspace
-                    </div>
-                    <div className="mt-1 text-4xl font-semibold tracking-tight text-slate-900">
-                      Analyse the role
-                    </div>
-                    <div className="mt-2 max-w-3xl text-sm text-slate-500">
-                      Compact role analysis, recommendation, and handoff outputs in one workspace.
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3">
-  {currentRunId ? (
-    <span className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
-      Run ID: {currentRunId}
-    </span>
-  ) : null}
-</div>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
+                  Guided application workspace
                 </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  {layerStates.map((layer) => (
-                    <div
-                      key={layer.label}
-                      className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm ${getLayerClasses(
-                        layer.state
-                      )}`}
-                    >
-                      <span
-                        className={`h-2.5 w-2.5 rounded-full ${getLayerDotClasses(
-                          layer.state
-                        )}`}
-                      />
-                      <span>{layer.label}</span>
-                    </div>
-                  ))}
+                <div className="mt-1 text-sm text-slate-500">
+                  Job analysis, progress tracking, and recommendation handoff.
                 </div>
               </div>
+
+              {currentRunId ? (
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
+                  Run ID: {currentRunId}
+                </span>
+              ) : null}
             </div>
 
             <div className="rounded-3xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
@@ -1069,12 +1504,6 @@ export default function WorkspaceJobPage() {
                   placeholder="Paste the job description here..."
                 />
 
-                {progressStep ? (
-                  <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                    ⏳ {progressStep}
-                  </div>
-                ) : null}
-
                 {state.jobError ? (
                   <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                     {state.jobError}
@@ -1086,6 +1515,58 @@ export default function WorkspaceJobPage() {
                     {state.finalError}
                   </div>
                 ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">
+                      Progress and stage status
+                    </div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {loading
+                        ? progressStep || progressLabel
+                        : "Track the current run without exposing internal engine details."}
+                    </div>
+                  </div>
+
+                  <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
+                    {progressPercent}% complete
+                  </div>
+                </div>
+
+                <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      loading
+                        ? "bg-amber-500"
+                        : progressPercent === 100
+                          ? "bg-green-500"
+                          : "bg-blue-500"
+                    }`}
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  {layerStates.map((layer) => (
+                    <div
+                      key={layer.label}
+                      className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm ${getLayerClasses(
+                        layer.state
+                      )}`}
+                    >
+                      <span
+                        className={`h-2.5 w-2.5 rounded-full ${getLayerDotClasses(
+                          layer.state
+                        )}`}
+                      />
+                      <span>{layer.label}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -1181,6 +1662,13 @@ export default function WorkspaceJobPage() {
                   <ResultCard title="Positioning strategy">
                     {applicationRecommendation.positioningStrategy || "-"}
                   </ResultCard>
+
+                  <FeedbackStars
+                    runId={currentRunId}
+                    stage="job_analysis"
+                    prompt={language === "DE" ? "Diesen Schritt bewerten" : "Rate this step"}
+                    locale={language === "DE" ? "de" : "en"}
+                  />
                 </div>
               ) : (
                 <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">
