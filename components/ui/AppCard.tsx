@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { designTokens } from "@/lib/design/tokens";
 
 const t = designTokens;
@@ -9,12 +9,14 @@ type AppCardProps = {
   children: ReactNode;
   className?: string;
   soft?: boolean;
+  style?: CSSProperties;
 };
 
 export default function AppCard({
   children,
   className,
-  soft,
+  soft = false,
+  style,
 }: AppCardProps) {
   return (
     <div
@@ -24,6 +26,7 @@ export default function AppCard({
         border: `1px solid ${t.colors.border}`,
         borderRadius: t.radius.lg,
         boxShadow: t.shadow.md,
+        ...style,
       }}
     >
       {children}

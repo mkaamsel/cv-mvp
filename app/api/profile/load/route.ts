@@ -1,3 +1,4 @@
+import { NextResponse } from "next/server";
 import { loadOrCreateCandidateWorkspace } from "@/lib/profile/profile-store";
 
 export const runtime = "nodejs";
@@ -19,44 +20,54 @@ type LoadProfileError = {
   error: string;
 };
 
-function jsonResponse(
-  body: LoadProfileSuccess | LoadProfileError,
-  status = 200
-): Response {
-  return Response.json(body, {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-    },
-  });
-}
-
 export async function GET(): Promise<Response> {
   try {
     const workspace = await loadOrCreateCandidateWorkspace();
 
-    return jsonResponse({
+    const response: LoadProfileSuccess = {
       ok: true,
       workspace: workspace
         ? {
-            profile: workspace.profile,
-            documents: workspace.documents,
-            meta: workspace.meta,
-            createdAt: workspace.createdAt,
-            updatedAt: workspace.updatedAt,
+            profile: workspace.profile ?? null,
+            documents: Array.isArray(workspace.documents)
+              ? workspace.documents
+              : [],
+            meta:
+              workspace.meta && typeof workspace.meta === "object"
+                ? workspace.meta
+                : {},
+            createdAt:
+              typeof workspace.createdAt === "string"
+                ? workspace.createdAt
+                : null,
+            updatedAt:
+              typeof workspace.updatedAt === "string"
+                ? workspace.updatedAt
+                : null,
           }
         : null,
+    };
+
+    return NextResponse.json(response, {
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store",
+      },
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown server error.";
 
-    return jsonResponse(
-      {
-        ok: false,
-        error: message,
+    const response: LoadProfileError = {
+      ok: false,
+      error: message,
+    };
+
+    return NextResponse.json(response, {
+      status: 500,
+      headers: {
+        "Cache-Control": "no-store",
       },
-      500
-    );
+    });
   }
 }

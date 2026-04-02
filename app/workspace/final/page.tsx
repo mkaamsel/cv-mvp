@@ -1,17 +1,23 @@
 "use client";
 
-import { type CSSProperties } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import AppCard from "@/components/ui/AppCard";
 import SectionLabel from "@/components/ui/SectionLabel";
 import FeedbackStars from "@/components/feedback/FeedbackStars";
 import { useWorkspace } from "@/components/workspace/WorkspaceProvider";
+import type {
+  WorkspaceFinalDrafts,
+  WorkspaceInsights,
+} from "@/lib/workspace/types";
 import { designTokens } from "@/lib/design/tokens";
 
 const t = designTokens;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function asString(value: unknown): string | null {
@@ -34,53 +40,129 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-function copy(text: string) {
-  navigator.clipboard.writeText(text);
+async function copy(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // ignore clipboard errors
+  }
 }
 
-function extractPositioningBrief(insights: unknown): string {
-  const record = asRecord(insights);
-  if (!record) return "No positioning brief available yet.";
+function formatOutputLanguage(value: string | undefined): string {
+  if (value === "de") return "German";
+  if (value === "en") return "English";
+  if (!value) return "English";
+  return value;
+}
+
+function extractFinalCv(finalDrafts: WorkspaceFinalDrafts | null): string {
+  return (
+    finalDrafts?.finalCv ||
+    finalDrafts?.cvDraft ||
+    asString(asRecord(finalDrafts?.drafts)?.finalCv) ||
+    asString(asRecord(finalDrafts?.drafts)?.cvDraft) ||
+    "No final CV available yet. Analyse a role first."
+  );
+}
+
+function extractFinalCoverLetter(
+  finalDrafts: WorkspaceFinalDrafts | null,
+): string {
+  return (
+    finalDrafts?.finalCoverLetter ||
+    finalDrafts?.coverLetterDraft ||
+    asString(asRecord(finalDrafts?.drafts)?.finalCoverLetter) ||
+    asString(asRecord(finalDrafts?.drafts)?.coverLetterDraft) ||
+    "No final cover letter available yet. Analyse a role first."
+  );
+}
+
+function extractPositioningBrief(insights: WorkspaceInsights | null): string {
+  if (!insights) return "No positioning brief available yet.";
+
+  const positioningRecord = asRecord(insights.positioningBrief);
 
   return (
-    asString(record.positioningBrief) ||
-    asString(record.positioningStrategy) ||
-    asString(record.summary) ||
+    asString(insights.positioningBrief) ||
+    insights.positioningStrategy ||
+    asString(positioningRecord?.positioningStrategy) ||
+    asString(positioningRecord?.coverLetterAngle) ||
+    (() => {
+      const whyFit = asStringArray(positioningRecord?.coreWhyFit);
+      return whyFit.length
+        ? whyFit.map((item) => `• ${item}`).join("\n")
+        : null;
+    })() ||
     "No positioning brief available yet."
   );
 }
 
-function extractEvidenceSummary(insights: unknown): string {
-  const record = asRecord(insights);
-  if (!record) return "No evidence summary available yet.";
+function extractEvidenceSummary(insights: WorkspaceInsights | null): string {
+  if (!insights) return "No evidence summary available yet.";
 
-  const selectedEvidence = asStringArray(record.selectedEvidence);
-  if (selectedEvidence.length > 0) {
-    return selectedEvidence.map((item) => `• ${item}`).join("\n");
+  const directEvidence = [
+    insights.selectedEvidence,
+    asRecord(insights.bundle)?.selectedEvidence,
+  ];
+
+  for (const candidate of directEvidence) {
+    const arr = asStringArray(candidate);
+    if (arr.length > 0) {
+      return arr.map((item) => `• ${item}`).join("\n");
+    }
   }
 
-  return asString(record.evidenceSummary) || "No evidence summary available yet.";
+  const selectedEvidenceRecord =
+    asRecord(insights.selectedEvidence) ??
+    asRecord(asRecord(insights.bundle)?.selectedEvidence);
+
+  if (selectedEvidenceRecord) {
+    const items = [
+      ...asStringArray(selectedEvidenceRecord.items),
+      ...asStringArray(selectedEvidenceRecord.evidence),
+      ...asStringArray(selectedEvidenceRecord.claims),
+    ];
+
+    if (items.length > 0) {
+      return items.map((item) => `• ${item}`).join("\n");
+    }
+  }
+
+  const strongMatches = insights.strongMatches ?? [];
+  if (strongMatches.length > 0) {
+    return strongMatches.map((item) => `• ${item}`).join("\n");
+  }
+
+  return "No evidence summary available yet.";
 }
 
-function extractCompetencyProfile(finalDrafts: unknown): string {
-  const record = asRecord(finalDrafts?.rawResponse);
-  if (!record) return "No competency profile available yet.";
+function extractRecommendation(insights: WorkspaceInsights | null): string {
+  if (!insights) return "No recommendation available yet.";
 
   return (
-    asString(record.competencyProfile) ||
-    asString(record.competencySummary) ||
-    "No competency profile available yet."
+    insights.advisorMessage ||
+    insights.reasoningSummary ||
+    asString(insights.recommendation) ||
+    asString(asRecord(insights.recommendation)?.summary) ||
+    asString(asRecord(insights.recommendation)?.decision) ||
+    asString(asRecord(insights.recommendation)?.rationale) ||
+    "No recommendation available yet."
   );
 }
 
-function extractReviewFindings(finalDrafts: unknown): string {
-  const record = asRecord(finalDrafts?.rawResponse);
-  if (!record) return "No review findings available yet.";
+function extractReviewFindings(finalDrafts: WorkspaceFinalDrafts | null): string {
+  if (!finalDrafts) return "No review findings available yet.";
 
-  const findings = record.reviewFindings ?? record.review;
+  const findings =
+    finalDrafts.reviewFindings ??
+    asRecord(finalDrafts.rawResponse)?.reviewFindings ??
+    asRecord(finalDrafts.rawResponse)?.review ??
+    null;
+
   if (!findings) return "No review findings available yet.";
 
   if (typeof findings === "string") return findings;
+
   if (Array.isArray(findings)) {
     return findings.map((item) => `• ${String(item)}`).join("\n");
   }
@@ -88,46 +170,60 @@ function extractReviewFindings(finalDrafts: unknown): string {
   return stringifyUnknown(findings);
 }
 
-function extractProfileDiscoverySignals(insights: unknown): string {
-  const record = asRecord(insights);
-  if (!record) return "No profile discovery signals available yet.";
+function extractProfileDiscoverySignals(
+  insights: WorkspaceInsights | null,
+): string {
+  if (!insights) return "No profile discovery signals available yet.";
 
-  const missingSignals = asStringArray(record.missingSignals);
-  if (missingSignals.length > 0) {
-    return missingSignals.map((item) => `• ${item}`).join("\n");
+  const candidates: string[][] = [
+  insights?.missingSignals,
+  insights?.riskAreas,
+  insights?.blockers,
+  asStringArray(asRecord(insights?.recommendation)?.risks),
+  asStringArray(asRecord(insights?.positioningBrief)?.positioningRisks),
+].filter((candidate): candidate is string[] => Array.isArray(candidate));
+
+for (const candidate of candidates) {
+  if (candidate.length > 0) {
+    return candidate.map((item) => `• ${item}`).join("\n");
   }
-
-  return asString(record.profileDiscoverySignals) || "No profile discovery signals available yet.";
 }
 
-function extractWarnings(insights: unknown, finalDrafts: unknown): string {
+  return "No profile discovery signals available yet.";
+}
+
+function extractRefinementNotes(
+  insights: WorkspaceInsights | null,
+  finalDrafts: WorkspaceFinalDrafts | null,
+): string {
   const parts: string[] = [];
 
-  const insightsRecord = asRecord(insights);
-  if (insightsRecord) {
-    const risks = asStringArray(insightsRecord.riskAreas);
-    const blockers = asStringArray(insightsRecord.blockers);
-
-    if (risks.length > 0) {
-      parts.push("Risk areas:");
-      parts.push(...risks.map((item) => `• ${item}`));
-    }
-
-    if (blockers.length > 0) {
-      if (parts.length > 0) parts.push("");
-      parts.push("Blockers:");
-      parts.push(...blockers.map((item) => `• ${item}`));
-    }
+  if (insights?.riskAreas?.length) {
+    parts.push("Risk areas:");
+    parts.push(...insights.riskAreas.map((item) => `• ${item}`));
   }
 
-  const rawResponse = asRecord(finalDrafts?.rawResponse);
-  if (rawResponse) {
-    const warnings = rawResponse.warnings;
-    if (Array.isArray(warnings) && warnings.length > 0) {
-      if (parts.length > 0) parts.push("");
-      parts.push("Warnings:");
-      parts.push(...warnings.map((item) => `• ${String(item)}`));
-    }
+  if (insights?.blockers?.length) {
+    if (parts.length > 0) parts.push("");
+    parts.push("Blockers:");
+    parts.push(...insights.blockers.map((item) => `• ${item}`));
+  }
+
+  if (finalDrafts?.warnings?.length) {
+    if (parts.length > 0) parts.push("");
+    parts.push("Warnings:");
+    parts.push(...finalDrafts.warnings.map((item) => `• ${item}`));
+  }
+
+  const rawWarnings = asRecord(finalDrafts?.rawResponse)?.warnings;
+  if (
+    !finalDrafts?.warnings?.length &&
+    Array.isArray(rawWarnings) &&
+    rawWarnings.length > 0
+  ) {
+    if (parts.length > 0) parts.push("");
+    parts.push("Warnings:");
+    parts.push(...rawWarnings.map((item) => `• ${String(item)}`));
   }
 
   return parts.length > 0 ? parts.join("\n") : "No refinement notes yet.";
@@ -141,7 +237,7 @@ function OutputBlock({
 }: {
   title: string;
   subtitle?: string;
-  children: React.ReactNode;
+  children: ReactNode;
   defaultOpen?: boolean;
 }) {
   return (
@@ -168,32 +264,26 @@ function SummaryPill({ label }: { label: string }) {
 }
 
 export default function WorkspaceFinalPage() {
-  const { state } = useWorkspace();
+  const { state, progress } = useWorkspace();
 
   const finalDrafts = state.finalDrafts;
+  const finalCv = extractFinalCv(finalDrafts);
+  const finalCoverLetter = extractFinalCoverLetter(finalDrafts);
 
-  const finalCv =
-    finalDrafts?.finalCv ||
-    finalDrafts?.cvDraft ||
-    "No final CV available yet. Analyse a role first.";
-
-  const finalCoverLetter =
-    finalDrafts?.finalCoverLetter ||
-    finalDrafts?.coverLetterDraft ||
-    "No final cover letter available yet. Analyse a role first.";
-
-  const outputLanguage =
-    finalDrafts?.outputLanguage ||
-    (state.jobProfile?.outputLanguage === "de" ? "German" : "English");
-
-  const runId = finalDrafts?.runId || "";
+  const outputLanguage = formatOutputLanguage(
+    finalDrafts?.outputLanguage || state.jobProfile?.outputLanguage,
+  );
+  const runId = finalDrafts?.runId || state.telemetry?.runId || "";
 
   const positioningBrief = extractPositioningBrief(state.insights);
   const evidenceSummary = extractEvidenceSummary(state.insights);
-  const competencyProfile = extractCompetencyProfile(finalDrafts);
+  const recommendation = extractRecommendation(state.insights);
   const reviewFindings = extractReviewFindings(finalDrafts);
   const profileDiscoverySignals = extractProfileDiscoverySignals(state.insights);
-  const refinementNotes = extractWarnings(state.insights, finalDrafts);
+  const refinementNotes = extractRefinementNotes(state.insights, finalDrafts);
+
+  const hasFinalDrafts = Boolean(finalDrafts);
+  const isReadyForGeneration = progress.profileReady && progress.jobReady;
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -221,36 +311,75 @@ export default function WorkspaceFinalPage() {
             color: t.colors.textSecondary,
           }}
         >
-          This page displays the generated documents and the supporting intelligence
-          already prepared in the previous steps.
+          This page shows the generated CV and cover letter, together with the
+          reasoning that shaped them.
         </p>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            flexWrap: "wrap",
+            marginTop: 16,
+          }}
+        >
           <SummaryPill label={`Output: ${outputLanguage}`} />
-          <SummaryPill label={`Status: ${finalDrafts ? "Ready" : "Pending"}`} />
+          <SummaryPill
+            label={`Status: ${
+              hasFinalDrafts
+                ? "Ready"
+                : state.finalStatus === "loading"
+                  ? "Generating"
+                  : "Pending"
+            }`}
+          />
           {runId ? <SummaryPill label={`Run ID: ${runId}`} /> : null}
         </div>
 
-        {finalDrafts ? (
-          <FeedbackStars
-  runId={runId}
-  stage="final_documents"
-  prompt={outputLanguage === "German" ? "Diesen Schritt bewerten" : "Rate this step"}
-  locale={outputLanguage === "German" ? "de" : "en"}
-/>
+        {state.finalError ? (
+          <div style={errorBannerStyle}>{state.finalError}</div>
+        ) : null}
+
+        {hasFinalDrafts ? (
+          <div style={{ marginTop: 16 }}>
+            <FeedbackStars
+              runId={runId}
+              stage="final_documents"
+              prompt={
+                outputLanguage === "German"
+                  ? "Diesen Schritt bewerten"
+                  : "Rate this step"
+              }
+              locale={outputLanguage === "German" ? "de" : "en"}
+            />
+          </div>
         ) : null}
       </AppCard>
 
-      {!finalDrafts ? (
+      {!hasFinalDrafts ? (
         <AppCard className="p-6">
           <div style={emptyStateStyle}>
-            No generated documents yet. Go back to the Job step, analyse the role,
-            and the system will generate the final output automatically.
+            {!isReadyForGeneration
+              ? "No generated documents yet. Complete the Profile and Job steps first so the final output can be created."
+              : "No generated documents yet. Return to the Job step and run the pipeline so the final output is generated into workspace state."}
           </div>
 
-          <div style={{ marginTop: 16 }}>
+          <div
+            style={{
+              marginTop: 16,
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+            }}
+          >
+            <Link href="/workspace/profile" style={secondaryLinkStyle}>
+              Open Profile
+            </Link>
             <Link href="/workspace/job" style={primaryLinkStyle}>
               Return to Job
+            </Link>
+            <Link href="/workspace/insights" style={secondaryLinkStyle}>
+              Open Insights
             </Link>
           </div>
         </AppCard>
@@ -262,10 +391,12 @@ export default function WorkspaceFinalPage() {
             defaultOpen
           >
             <div style={headerRowStyle}>
-              <div style={smallMutedStyle}>Generated and stored in workspace state.</div>
+              <div style={smallMutedStyle}>
+                Generated and stored in workspace state.
+              </div>
               <button
                 type="button"
-                onClick={() => copy(finalCv)}
+                onClick={() => void copy(finalCv)}
                 style={secondaryButtonStyle}
               >
                 Copy CV
@@ -280,10 +411,12 @@ export default function WorkspaceFinalPage() {
             defaultOpen
           >
             <div style={headerRowStyle}>
-              <div style={smallMutedStyle}>Generated and stored in workspace state.</div>
+              <div style={smallMutedStyle}>
+                Generated and stored in workspace state.
+              </div>
               <button
                 type="button"
-                onClick={() => copy(finalCoverLetter)}
+                onClick={() => void copy(finalCoverLetter)}
                 style={secondaryButtonStyle}
               >
                 Copy cover letter
@@ -299,8 +432,15 @@ export default function WorkspaceFinalPage() {
           >
             <pre style={preStyle}>{refinementNotes}</pre>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
-              <Link href="/profile" style={secondaryLinkStyle}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                marginTop: 16,
+              }}
+            >
+              <Link href="/workspace/profile" style={secondaryLinkStyle}>
                 Update profile
               </Link>
               <Link href="/workspace/job" style={primaryLinkStyle}>
@@ -327,10 +467,10 @@ export default function WorkspaceFinalPage() {
           </OutputBlock>
 
           <OutputBlock
-            title="Competency Profile"
-            subtitle="Structured capability view supporting the final output."
+            title="Recommendation"
+            subtitle="Current role recommendation from the pipeline."
           >
-            <pre style={preStyle}>{competencyProfile}</pre>
+            <pre style={preStyle}>{recommendation}</pre>
           </OutputBlock>
 
           <OutputBlock
@@ -346,8 +486,15 @@ export default function WorkspaceFinalPage() {
           >
             <pre style={preStyle}>{profileDiscoverySignals}</pre>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
-              <Link href="/profile" style={primaryLinkStyle}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                marginTop: 16,
+              }}
+            >
+              <Link href="/workspace/profile" style={primaryLinkStyle}>
                 Add evidence in Profile
               </Link>
               <Link href="/workspace/job" style={secondaryLinkStyle}>
@@ -413,6 +560,17 @@ const emptyStateStyle: CSSProperties = {
   fontSize: 14,
   lineHeight: 1.7,
   color: t.colors.textSecondary,
+};
+
+const errorBannerStyle: CSSProperties = {
+  marginTop: 16,
+  borderRadius: t.radius.md,
+  border: `1px solid ${t.colors.border}`,
+  background: t.colors.backgroundSoft,
+  padding: 14,
+  fontSize: 14,
+  lineHeight: 1.6,
+  color: t.colors.textPrimary,
 };
 
 const primaryLinkStyle: CSSProperties = {

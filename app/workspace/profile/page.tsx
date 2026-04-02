@@ -1,74 +1,69 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useRouter } from "next/navigation";
 import AppCard from "@/components/ui/AppCard";
 import SectionLabel from "@/components/ui/SectionLabel";
 import { useWorkspace } from "@/components/workspace/WorkspaceProvider";
 import { designTokens } from "@/lib/design/tokens";
-import type { WorkspaceCandidateProfile } from "@/lib/workspace/types";
+import type {
+  WorkspaceCandidateProfile,
+  WorkspaceCandidateCertification,
+  WorkspaceCandidateEducation,
+  WorkspaceCandidateLanguage,
+  WorkspaceCandidateRole,
+  WorkspaceVerifiedClaim,
+} from "@/lib/workspace/types";
 
 const t = designTokens;
 
-type CandidateRole = {
-  title: string;
-  company: string | null;
-  startDate: string | null;
-  endDate: string | null;
-  isCurrent: boolean;
-  location: string | null;
-  achievements: string[];
+type ExtractCandidateProfileSuccess = {
+  candidateProfile: Record<string, unknown>;
+  warnings?: string[];
 };
 
-type CandidateLanguage = {
-  language: string;
-  proficiency: string | null;
-};
-
-type CandidateEducation = {
-  degree: string;
-  field: string | null;
-  institution: string | null;
-  endDate: string | null;
-};
-
-type CandidateCertification = {
-  name: string;
-  issuer: string | null;
-  date: string | null;
-};
-
-type VerifiedClaim = {
-  claim: string;
-  evidence: string[];
-  confidence: "high" | "medium";
+type ExtractCandidateProfileError = {
+  error?: string;
 };
 
 type ExtractCandidateProfileResponse =
-  | {
-      ok: true;
-      profile: Record<string, unknown>;
-    }
-  | {
-      ok: false;
-      error?: string;
-    };
+  | ExtractCandidateProfileSuccess
+  | ExtractCandidateProfileError;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
 
 function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
+    ? value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
     : [];
 }
 
-function normalizeRole(input: unknown): CandidateRole | null {
-  if (!input || typeof input !== "object") return null;
-  const role = input as Record<string, unknown>;
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function normalizeRole(input: unknown): WorkspaceCandidateRole | null {
+  const role = asRecord(input);
+  if (!role) return null;
+
+  const title = asString(role.title) ?? "";
+  if (!title) return null;
 
   return {
-    title: typeof role.title === "string" ? role.title : "",
+    title,
     company: asString(role.company),
     startDate: asString(role.startDate),
     endDate: asString(role.endDate),
@@ -78,11 +73,11 @@ function normalizeRole(input: unknown): CandidateRole | null {
   };
 }
 
-function normalizeLanguage(input: unknown): CandidateLanguage | null {
-  if (!input || typeof input !== "object") return null;
-  const item = input as Record<string, unknown>;
+function normalizeLanguage(input: unknown): WorkspaceCandidateLanguage | null {
+  const item = asRecord(input);
+  if (!item) return null;
 
-  const language = typeof item.language === "string" ? item.language : "";
+  const language = asString(item.language) ?? "";
   if (!language) return null;
 
   return {
@@ -91,11 +86,11 @@ function normalizeLanguage(input: unknown): CandidateLanguage | null {
   };
 }
 
-function normalizeEducation(input: unknown): CandidateEducation | null {
-  if (!input || typeof input !== "object") return null;
-  const item = input as Record<string, unknown>;
+function normalizeEducation(input: unknown): WorkspaceCandidateEducation | null {
+  const item = asRecord(input);
+  if (!item) return null;
 
-  const degree = typeof item.degree === "string" ? item.degree : "";
+  const degree = asString(item.degree) ?? "";
   if (!degree) return null;
 
   return {
@@ -106,25 +101,27 @@ function normalizeEducation(input: unknown): CandidateEducation | null {
   };
 }
 
-function normalizeCertification(input: unknown): CandidateCertification | null {
-  if (!input || typeof input !== "object") return null;
-  const item = input as Record<string, unknown>;
+function normalizeCertification(
+  input: unknown,
+): WorkspaceCandidateCertification | null {
+  const item = asRecord(input);
+  if (!item) return null;
 
-  const name = typeof item.name === "string" ? item.name : "";
+  const name = asString(item.name) ?? "";
   if (!name) return null;
 
   return {
     name,
     issuer: asString(item.issuer),
-    date: asString(item.date),
+    date: asString(item.date) ?? asString(item.year),
   };
 }
 
-function normalizeVerifiedClaim(input: unknown): VerifiedClaim | null {
-  if (!input || typeof input !== "object") return null;
-  const item = input as Record<string, unknown>;
+function normalizeVerifiedClaim(input: unknown): WorkspaceVerifiedClaim | null {
+  const item = asRecord(input);
+  if (!item) return null;
 
-  const claim = typeof item.claim === "string" ? item.claim : "";
+  const claim = asString(item.claim) ?? "";
   if (!claim) return null;
 
   return {
@@ -134,57 +131,80 @@ function normalizeVerifiedClaim(input: unknown): VerifiedClaim | null {
   };
 }
 
-function normalizeWorkspaceCandidateProfile(input: unknown): WorkspaceCandidateProfile {
-  const raw =
-    input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+function normalizeWorkspaceCandidateProfile(
+  input: unknown,
+): WorkspaceCandidateProfile {
+  const raw = asRecord(input) ?? {};
 
-  const legacyRoles = Array.isArray(raw.roles) ? raw.roles : [];
-  const experienceRoles = Array.isArray(raw.experience) ? raw.experience : [];
+  const roleCandidates = Array.isArray(raw.roles)
+    ? raw.roles
+    : Array.isArray(raw.experience)
+      ? raw.experience
+      : [];
+
+  const coreSkills = uniqueStrings([
+    ...asStringArray(raw.coreSkills),
+    ...asStringArray(raw.skills),
+  ]);
+
+  const strengths = asStringArray(raw.strengths);
 
   return {
     fullName: asString(raw.fullName),
     headline: asString(raw.headline),
     summary: asString(raw.summary),
-
-    roles: [...legacyRoles, ...experienceRoles]
+    roles: roleCandidates
       .map(normalizeRole)
-      .filter((item): item is CandidateRole => Boolean(item)),
-
-    coreSkills: [...asStringArray(raw.coreSkills), ...asStringArray(raw.skills)],
+      .filter((item): item is WorkspaceCandidateRole => Boolean(item)),
+    coreSkills,
     tools: asStringArray(raw.tools),
-    standards: [...asStringArray(raw.standards), ...asStringArray(raw.domains)],
+    standards: uniqueStrings([
+      ...asStringArray(raw.standards),
+      ...asStringArray(raw.domains),
+    ]),
     industries: asStringArray(raw.industries),
-
     languages: (Array.isArray(raw.languages) ? raw.languages : [])
       .map(normalizeLanguage)
-      .filter((item): item is CandidateLanguage => Boolean(item)),
-
+      .filter((item): item is WorkspaceCandidateLanguage => Boolean(item)),
     education: (Array.isArray(raw.education) ? raw.education : [])
       .map(normalizeEducation)
-      .filter((item): item is CandidateEducation => Boolean(item)),
-
+      .filter((item): item is WorkspaceCandidateEducation => Boolean(item)),
     certifications: (Array.isArray(raw.certifications) ? raw.certifications : [])
       .map(normalizeCertification)
-      .filter((item): item is CandidateCertification => Boolean(item)),
-
+      .filter((item): item is WorkspaceCandidateCertification => Boolean(item)),
     leadershipSignals: asStringArray(raw.leadershipSignals),
-    strengths: asStringArray(raw.strengths),
+    strengths,
     constraints: asStringArray(raw.constraints),
-
     verifiedClaims: (Array.isArray(raw.verifiedClaims) ? raw.verifiedClaims : [])
       .map(normalizeVerifiedClaim)
-      .filter((item): item is VerifiedClaim => Boolean(item)),
-
+      .filter((item): item is WorkspaceVerifiedClaim => Boolean(item)),
     openQuestions: asStringArray(raw.openQuestions),
-
-    competencies: [...asStringArray(raw.coreSkills), ...asStringArray(raw.skills)],
-    evidenceNotes: asStringArray(raw.strengths),
-
+    competencies: coreSkills,
+    evidenceNotes: asStringArray(raw.evidenceNotes).length
+      ? asStringArray(raw.evidenceNotes)
+      : strengths,
     rawResponse: raw,
   };
 }
 
+function toDisplayStatus(value: string): string {
+  switch (value) {
+    case "idle":
+      return "Idle";
+    case "loading":
+      return "Loading";
+    case "ready":
+      return "Ready";
+    case "error":
+      return "Error";
+    default:
+      return value;
+  }
+}
+
 export default function WorkspaceProfilePage() {
+  const router = useRouter();
+
   const {
     state,
     setUploadedFiles,
@@ -195,6 +215,40 @@ export default function WorkspaceProfilePage() {
 
   const [candidateText, setCandidateText] = useState("");
   const [supportingText, setSupportingText] = useState("");
+
+  useEffect(() => {
+    if (state.candidateProfile && !candidateText.trim()) {
+      const raw = asRecord(state.candidateProfile.rawResponse);
+      const rawSummary = asString(raw?.summary);
+      if (rawSummary) {
+        setCandidateText((current) => current || rawSummary);
+      }
+    }
+  }, [candidateText, state.candidateProfile]);
+
+  const profile = state.candidateProfile ?? null;
+  const profileRoles = profile?.roles ?? [];
+  const profileCoreSkills = profile?.coreSkills ?? [];
+  const profileTools = profile?.tools ?? [];
+  const profileStandards = profile?.standards ?? [];
+  const profileVerifiedClaims = profile?.verifiedClaims ?? [];
+
+  const profileStats = useMemo(
+    () => ({
+      roles: profileRoles.length,
+      skills: profileCoreSkills.length,
+      tools: profileTools.length,
+      standards: profileStandards.length,
+      claims: profileVerifiedClaims.length,
+    }),
+    [
+      profileRoles.length,
+      profileCoreSkills.length,
+      profileTools.length,
+      profileStandards.length,
+      profileVerifiedClaims.length,
+    ],
+  );
 
   async function handleBuildProfile() {
     if (!candidateText.trim()) {
@@ -213,7 +267,7 @@ export default function WorkspaceProfilePage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          locale: "en",
+          outputLanguage: "en",
           documents: [
             {
               fileName: "Primary CV",
@@ -237,31 +291,77 @@ export default function WorkspaceProfilePage() {
 
       const data = (await response.json()) as ExtractCandidateProfileResponse;
 
-      if (!response.ok || !data?.ok || !data.profile) {
+      if (
+        !response.ok ||
+        !("candidateProfile" in data) ||
+        !data.candidateProfile
+      ) {
         throw new Error(
           "error" in data && data.error
             ? data.error
-            : "Could not build candidate profile."
+            : "Could not build candidate profile.",
         );
       }
 
-      const normalizedProfile = normalizeWorkspaceCandidateProfile(data.profile);
+      const normalizedProfile = normalizeWorkspaceCandidateProfile(
+        data.candidateProfile,
+      );
+
+      const uploadedFiles = [
+        candidateText.trim() ? "Primary CV" : null,
+        supportingText.trim() ? "Supporting Notes" : null,
+      ].filter((item): item is string => Boolean(item));
 
       setCandidateProfile(normalizedProfile);
+      setUploadedFiles(uploadedFiles);
 
-      setUploadedFiles(
-        [
-          candidateText.trim() ? "Primary CV" : null,
-          supportingText.trim() ? "Supporting Notes" : null,
-        ].filter((item): item is string => Boolean(item))
-      );
+      const saveResponse = await fetch("/api/profile/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          profile: normalizedProfile.rawResponse ?? normalizedProfile,
+          documents: [
+            {
+              fileName: "Primary CV",
+              kind: "primary_cv",
+              text: candidateText,
+              isPrimary: true,
+            },
+            ...(supportingText.trim()
+              ? [
+                  {
+                    fileName: "Supporting Notes",
+                    kind: "user_note",
+                    text: supportingText,
+                    isPrimary: false,
+                  },
+                ]
+              : []),
+          ],
+          meta: {
+            locale: "en",
+            sourceCount: uploadedFiles.length,
+            readinessLabel: "Profile built",
+            bootstrapStatus: "profile_ready",
+          },
+        }),
+      });
+
+      if (!saveResponse.ok) {
+        const saveData = (await saveResponse.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(saveData.error || "Profile was built but could not be saved.");
+      }
 
       setProfileStatus("ready");
       setProfileError(null);
     } catch (error) {
       setProfileStatus("error");
       setProfileError(
-        error instanceof Error ? error.message : "Unexpected profile error."
+        error instanceof Error ? error.message : "Unexpected profile error.",
       );
     }
   }
@@ -285,7 +385,7 @@ export default function WorkspaceProfilePage() {
             color: t.colors.textPrimary,
           }}
         >
-          Build the candidate profile first
+          Build the candidate profile
         </h1>
 
         <p
@@ -297,16 +397,15 @@ export default function WorkspaceProfilePage() {
             color: t.colors.textSecondary,
           }}
         >
-          Start with the candidate truth layer. Paste the main CV text, add any
-          supporting notes, and let the engine build a reusable profile before
-          moving to job analysis.
+          Paste the CV text and build the candidate truth layer before moving to
+          job analysis.
         </p>
       </AppCard>
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1.2fr 0.8fr",
+          gridTemplateColumns: "minmax(0, 1.2fr) minmax(320px, 0.8fr)",
           gap: 20,
           alignItems: "start",
         }}
@@ -315,8 +414,7 @@ export default function WorkspaceProfilePage() {
           <AppCard className="p-6">
             <h2 style={titleStyle}>Primary CV</h2>
             <p style={copyStyle}>
-              Paste the main CV text here. This is the core source used to build
-              the profile.
+              Paste the main CV text that should anchor the canonical candidate profile.
             </p>
 
             <textarea
@@ -334,14 +432,14 @@ export default function WorkspaceProfilePage() {
           <AppCard className="p-6" soft>
             <h2 style={titleStyle}>Supporting notes</h2>
             <p style={copyStyle}>
-              Add supporting context, candidate-confirmed clarifications, or useful
-              details that should feed the profile build.
+              Add clarifications, project details, or extra evidence that should
+              support the profile build.
             </p>
 
             <textarea
               value={supportingText}
               onChange={(e) => setSupportingText(e.target.value)}
-              placeholder="Paste supporting notes, achievements, or clarifications here..."
+              placeholder="Add clarifications or additional achievements..."
               style={{
                 ...textareaStyle,
                 minHeight: 220,
@@ -349,6 +447,122 @@ export default function WorkspaceProfilePage() {
               }}
             />
           </AppCard>
+
+          {profile ? (
+            <AppCard className="p-6">
+              <h2 style={titleStyle}>Built profile preview</h2>
+              <p style={copyStyle}>
+                This confirms the structured candidate profile is present in workspace state.
+              </p>
+
+              <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+                <PreviewLine label="Name" value={profile.fullName || "Not captured"} />
+                <PreviewLine label="Headline" value={profile.headline || "Not captured"} />
+                <PreviewLine label="Summary" value={profile.summary || "Not captured"} />
+                <PreviewLine
+                  label="Core skills"
+                  value={
+                    profileCoreSkills.length ? profileCoreSkills.join(", ") : "None yet"
+                  }
+                />
+                <PreviewLine
+                  label="Standards"
+                  value={
+                    profileStandards.length ? profileStandards.join(", ") : "None yet"
+                  }
+                />
+                <PreviewLine
+                  label="Tools"
+                  value={profileTools.length ? profileTools.join(", ") : "None yet"}
+                />
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <h3 style={subTitleStyle}>Roles</h3>
+                {profileRoles.length ? (
+                  <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                    {profileRoles.slice(0, 6).map((role, index) => (
+                      <div
+                        key={`${role.title}-${role.company ?? "company"}-${index}`}
+                        style={listCardStyle}
+                      >
+                        <div style={{ fontWeight: 700, color: t.colors.textPrimary }}>
+                          {role.title}
+                        </div>
+                        <div
+                          style={{
+                            marginTop: 4,
+                            color: t.colors.textSecondary,
+                            fontSize: 14,
+                          }}
+                        >
+                          {[role.company, role.startDate, role.endDate]
+                            .filter(Boolean)
+                            .join(" • ") || "No company/date captured"}
+                        </div>
+                        {role.achievements.length ? (
+                          <div
+                            style={{
+                              marginTop: 8,
+                              color: t.colors.textSecondary,
+                              fontSize: 14,
+                              lineHeight: 1.6,
+                            }}
+                          >
+                            {role.achievements.slice(0, 3).join(" · ")}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p style={{ ...copyStyle, marginTop: 10 }}>
+                    No structured roles captured yet.
+                  </p>
+                )}
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <h3 style={subTitleStyle}>Verified claims</h3>
+                {profileVerifiedClaims.length ? (
+                  <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                    {profileVerifiedClaims.slice(0, 6).map((claim, index) => (
+                      <div key={`${claim.claim}-${index}`} style={listCardStyle}>
+                        <div style={{ fontWeight: 700, color: t.colors.textPrimary }}>
+                          {claim.claim}
+                        </div>
+                        <div
+                          style={{
+                            marginTop: 4,
+                            color: t.colors.textSecondary,
+                            fontSize: 14,
+                          }}
+                        >
+                          Confidence: {claim.confidence}
+                        </div>
+                        {claim.evidence.length ? (
+                          <div
+                            style={{
+                              marginTop: 8,
+                              color: t.colors.textSecondary,
+                              fontSize: 14,
+                              lineHeight: 1.6,
+                            }}
+                          >
+                            {claim.evidence.join(" · ")}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p style={{ ...copyStyle, marginTop: 10 }}>
+                    No verified claims captured yet.
+                  </p>
+                )}
+              </div>
+            </AppCard>
+          ) : null}
         </div>
 
         <div style={{ display: "grid", gap: 20 }}>
@@ -358,7 +572,7 @@ export default function WorkspaceProfilePage() {
             <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
               <StatusLine
                 label="Current status"
-                value={state.profileStatus}
+                value={toDisplayStatus(state.profileStatus)}
               />
               <StatusLine
                 label="Uploaded sources"
@@ -368,31 +582,14 @@ export default function WorkspaceProfilePage() {
                     : "None yet"
                 }
               />
-              <StatusLine
-                label="Summary"
-                value={
-                  state.candidateProfile?.summary
-                    ? "Profile available"
-                    : "No profile yet"
-                }
-              />
+              <StatusLine label="Profile" value={profile ? "Ready" : "Not built"} />
+              <StatusLine label="Roles" value={String(profileStats.roles)} />
+              <StatusLine label="Skills" value={String(profileStats.skills)} />
+              <StatusLine label="Verified claims" value={String(profileStats.claims)} />
             </div>
 
             {state.profileError ? (
-              <div
-                style={{
-                  marginTop: 14,
-                  padding: 12,
-                  borderRadius: t.radius.md,
-                  border: `1px solid ${t.colors.danger}`,
-                  background: "#fff5f5",
-                  color: t.colors.textPrimary,
-                  fontSize: 14,
-                  lineHeight: 1.6,
-                }}
-              >
-                {state.profileError}
-              </div>
+              <div style={errorBoxStyle}>{state.profileError}</div>
             ) : null}
 
             <button
@@ -403,33 +600,32 @@ export default function WorkspaceProfilePage() {
                 ...primaryButtonStyle,
                 width: "100%",
                 marginTop: 16,
-                opacity: state.profileStatus === "loading" ? 0.75 : 1,
+                opacity: state.profileStatus === "loading" ? 0.8 : 1,
                 cursor:
                   state.profileStatus === "loading" ? "not-allowed" : "pointer",
               }}
             >
               {state.profileStatus === "loading"
                 ? "Building profile..."
-                : "Build profile"}
+                : profile
+                  ? "Rebuild profile"
+                  : "Build profile"}
             </button>
-          </AppCard>
 
-          <AppCard className="p-6" soft>
-            <h2 style={titleStyle}>Why this step matters</h2>
-
-            <ul
+            <button
+              type="button"
+              onClick={() => router.push("/workspace/job")}
+              disabled={!profile}
               style={{
-                margin: "14px 0 0",
-                paddingLeft: 18,
-                color: t.colors.textSecondary,
-                fontSize: 14,
-                lineHeight: 1.8,
+                ...secondaryButtonStyle,
+                width: "100%",
+                marginTop: 12,
+                opacity: profile ? 1 : 0.6,
+                cursor: profile ? "pointer" : "not-allowed",
               }}
             >
-              <li>It creates one reusable candidate truth layer.</li>
-              <li>It reduces weak tailoring later.</li>
-              <li>It keeps generated applications credible.</li>
-            </ul>
+              Continue to job
+            </button>
           </AppCard>
         </div>
       </div>
@@ -447,10 +643,10 @@ function StatusLine({ label, value }: { label: string; value: string }) {
         fontSize: 14,
       }}
     >
-      <span style={{ color: designTokens.colors.textMuted }}>{label}</span>
+      <span style={{ color: t.colors.textMuted }}>{label}</span>
       <span
         style={{
-          color: designTokens.colors.textPrimary,
+          color: t.colors.textPrimary,
           fontWeight: 700,
           textAlign: "right",
         }}
@@ -461,43 +657,103 @@ function StatusLine({ label, value }: { label: string; value: string }) {
   );
 }
 
+function PreviewLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: "grid", gap: 4 }}>
+      <div
+        style={{
+          fontSize: 13,
+          fontWeight: 700,
+          color: t.colors.textMuted,
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: 14,
+          lineHeight: 1.7,
+          color: t.colors.textPrimary,
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
 const titleStyle: CSSProperties = {
   margin: 0,
   fontSize: 20,
   fontWeight: 800,
-  color: designTokens.colors.textPrimary,
+  color: t.colors.textPrimary,
+};
+
+const subTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 16,
+  fontWeight: 800,
+  color: t.colors.textPrimary,
 };
 
 const copyStyle: CSSProperties = {
   margin: "8px 0 0",
   fontSize: 14,
   lineHeight: 1.7,
-  color: designTokens.colors.textSecondary,
+  color: t.colors.textSecondary,
 };
 
 const textareaStyle: CSSProperties = {
   width: "100%",
-  borderRadius: designTokens.radius.md,
-  border: `1px solid ${designTokens.colors.border}`,
-  background: designTokens.colors.surface,
-  color: designTokens.colors.textPrimary,
+  borderRadius: t.radius.md,
+  border: `1px solid ${t.colors.border}`,
+  background: t.colors.surface,
+  color: t.colors.textPrimary,
   padding: "12px 14px",
   fontSize: 14,
   lineHeight: 1.7,
   outline: "none",
   resize: "vertical",
-  fontFamily:
-    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+};
+
+const errorBoxStyle: CSSProperties = {
+  marginTop: 14,
+  padding: 12,
+  borderRadius: t.radius.md,
+  border: `1px solid ${t.colors.border}`,
+  background: t.colors.backgroundSoft,
+  color: t.colors.textPrimary,
+  fontSize: 14,
+  lineHeight: 1.6,
 };
 
 const primaryButtonStyle: CSSProperties = {
   height: 46,
   border: "none",
-  borderRadius: designTokens.radius.sm,
-  background: designTokens.colors.primary,
-  color: designTokens.colors.textOnPrimary,
+  borderRadius: t.radius.sm,
+  background: t.colors.primary,
+  color: t.colors.textOnPrimary,
   fontSize: 14,
   fontWeight: 700,
   padding: "0 16px",
-  boxShadow: designTokens.shadow.sm,
+};
+
+const secondaryButtonStyle: CSSProperties = {
+  height: 46,
+  borderRadius: t.radius.sm,
+  border: `1px solid ${t.colors.border}`,
+  background: t.colors.surface,
+  color: t.colors.textPrimary,
+  fontSize: 14,
+  fontWeight: 700,
+  padding: "0 16px",
+};
+
+const listCardStyle: CSSProperties = {
+  border: `1px solid ${t.colors.border}`,
+  borderRadius: t.radius.md,
+  background: t.colors.surface,
+  padding: 12,
 };

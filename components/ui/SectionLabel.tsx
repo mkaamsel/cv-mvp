@@ -1,25 +1,31 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { designTokens } from "@/lib/design/tokens";
 
 const t = designTokens;
 
+type SectionLabelTone = "blue" | "green" | "yellow" | "purple";
+
 type SectionLabelProps = {
   children: ReactNode;
-  tone?: "blue" | "green" | "yellow" | "purple";
+  tone?: SectionLabelTone;
+  style?: CSSProperties;
+};
+
+const toneMap: Record<SectionLabelTone, string> = {
+  blue: t.colors.primarySoft,
+  green: t.colors.accentGreen,
+  yellow: t.colors.accentYellow,
+  purple: t.colors.accentPurple,
 };
 
 export default function SectionLabel({
   children,
   tone = "blue",
+  style,
 }: SectionLabelProps) {
-  const toneColor = {
-    blue: t.colors.primarySoft,
-    green: t.colors.accentGreen,
-    yellow: t.colors.accentYellow,
-    purple: t.colors.accentPurple,
-  }[tone];
+  const background = toneMap[tone] ?? t.colors.primarySoft;
 
   return (
     <div
@@ -29,8 +35,11 @@ export default function SectionLabel({
         borderRadius: t.radius.sm,
         fontSize: 12,
         fontWeight: 700,
-        background: toneColor,
+        letterSpacing: "0.02em",
+        background,
         color: t.colors.textPrimary,
+        lineHeight: 1,
+        ...style,
       }}
     >
       {children}

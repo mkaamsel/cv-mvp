@@ -24,11 +24,14 @@ export class IntelligenceCore {
 
     const executionOrder: BundleLayerKey[] = [
       "candidate",
-      "job",
-      "requiredProfile",
-      "companyContext",
-      "selectedEvidence",
-      "positioningBrief"
+  "job",
+  "requiredProfile",
+  "companyContext",
+  "companyResearch",
+  "marketSignals",
+  "selectedEvidence",
+  "positioningBrief",
+  "recommendation"
     ];
 
     for (const layerKey of executionOrder) {

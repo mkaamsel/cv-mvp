@@ -896,6 +896,9 @@ export default function TailoringPage() {
 
       const data = (await res.json()) as TailoringExtractResponse;
 
+      console.log("TAILORING EXTRACT RESPONSE");
+      console.log(data);
+
       if (!res.ok) {
         setError(data?.error || "Could not extract job description.");
         setStructuredJob(data?.structuredJob || null);
@@ -932,6 +935,9 @@ export default function TailoringPage() {
 
       const contextData = (await contextRes.json()) as CompanyContextResponse;
 
+      console.log("COMPANY CONTEXT RESPONSE");
+      console.log(contextData);
+
       let resolvedCompanyContext: CompanyContext | null = null;
 
       if (contextRes.ok && contextData.ok) {
@@ -959,9 +965,34 @@ export default function TailoringPage() {
         const recommendationData =
           (await recommendationRes.json()) as ApplicationRecommendationResponse;
 
+        console.log("APPLICATION RECOMMENDATION RESPONSE");
+        console.log(recommendationData);
+
+        if (recommendationData.ok) {
+          console.log("REQUIREMENTS ANALYSIS");
+          console.log(recommendationData.requirementsAnalysis);
+
+          console.log("POSITIONING STRATEGY");
+          console.log(recommendationData.positioningStrategy);
+
+          console.log("STRONG MATCHES");
+          console.log(recommendationData.strongMatches);
+
+          console.log("STRETCH MATCHES");
+          console.log(recommendationData.stretchMatches);
+
+          console.log("RISK AREAS");
+          console.log(recommendationData.riskAreas);
+
+          console.log("BLOCKERS");
+          console.log(recommendationData.blockers);
+        }
+
         setApplicationRecommendation(recommendationData);
       }
-    } catch {
+    } catch (caughtError) {
+      console.error("TAILORING PAGE ERROR");
+      console.error(caughtError);
       setError("Could not extract job description.");
     } finally {
       setExtractingJob(false);

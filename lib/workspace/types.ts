@@ -1,7 +1,19 @@
+export type WorkspaceRequirementImportance =
+  | "blocker"
+  | "core"
+  | "supporting"
+  | "preferred";
+
+export type WorkspaceRequirementMatchStatus =
+  | "matched"
+  | "adjacent"
+  | "weak"
+  | "missing";
+
 export type WorkspaceRequirementAnalysisItem = {
   requirement: string;
-  importance: "blocker" | "core" | "supporting" | "preferred";
-  matchStatus: "matched" | "adjacent" | "weak" | "missing";
+  importance: WorkspaceRequirementImportance;
+  matchStatus: WorkspaceRequirementMatchStatus;
   notes: string;
 };
 
@@ -33,10 +45,12 @@ export type WorkspaceCandidateCertification = {
   date: string | null;
 };
 
+export type WorkspaceVerifiedClaimConfidence = "high" | "medium";
+
 export type WorkspaceVerifiedClaim = {
   claim: string;
   evidence: string[];
-  confidence: "high" | "medium";
+  confidence: WorkspaceVerifiedClaimConfidence;
 };
 
 export type WorkspaceCandidateProfile = {
@@ -66,6 +80,16 @@ export type WorkspaceCandidateProfile = {
   rawResponse?: unknown;
 };
 
+export type WorkspaceJobExtractionSource =
+  | "pasted-text"
+  | "direct-fetch"
+  | "readable-fallback"
+  | "direct-fetch+user-text-fallback"
+  | "readable-fallback+user-text-fallback"
+  | "blocked-or-thin-content";
+
+export type WorkspaceOutputLanguage = "de" | "en";
+
 export type WorkspaceJobProfile = {
   companyName?: string;
   jobTitle?: string;
@@ -75,33 +99,31 @@ export type WorkspaceJobProfile = {
   summary?: string;
 
   extractedText?: string;
-  extractionSource?:
-    | "pasted-text"
-    | "direct-fetch"
-    | "readable-fallback"
-    | "direct-fetch+user-text-fallback"
-    | "readable-fallback+user-text-fallback"
-    | "blocked-or-thin-content";
+  extractionSource?: WorkspaceJobExtractionSource;
   normalizedUrl?: string;
   warnings?: string[];
 
-  outputLanguage?: "de" | "en";
+  outputLanguage?: WorkspaceOutputLanguage;
 
   rawResponse?: unknown;
 };
 
+export type WorkspaceApplicationRecommendation =
+  | "apply_confidently"
+  | "apply_with_care"
+  | "borderline"
+  | "not_recommended";
+
 export type WorkspaceInsights = {
-  selectedEvidence?: string[];
-  positioningBrief?: string;
+  selectedEvidence?: string[] | Record<string, unknown>;
+  positioningBrief?: string | Record<string, unknown>;
   positioningStrategy?: string;
   missingSignals?: string[];
   companyContext?: string | Record<string, unknown> | null;
+  recommendation?: string | Record<string, unknown> | null;
+  bundle?: Record<string, unknown> | null;
 
-  applicationRecommendation?:
-    | "apply_confidently"
-    | "apply_with_care"
-    | "borderline"
-    | "not_recommended";
+  applicationRecommendation?: WorkspaceApplicationRecommendation;
   advisorMessage?: string;
   reasoningSummary?: string;
   strongMatches?: string[];
@@ -119,18 +141,20 @@ export type WorkspaceFinalDrafts = {
   finalCv?: string;
   finalCoverLetter?: string;
 
-  outputLanguage?: string;
+  drafts?: Record<string, unknown> | null;
+  warnings?: string[];
+  reviewFindings?: string | string[] | Record<string, unknown>;
+
+  outputLanguage?: WorkspaceOutputLanguage;
   status?: string;
   runId?: string;
 
   rawResponse?: unknown;
 };
 
-export type WorkspaceStepKey =
-  | "profile"
-  | "job"
-  | "final"
-  | "insights";
+export type WorkspaceStepKey = "profile" | "job" | "insights" | "final";
+
+export type WorkspaceStepStatus = "idle" | "loading" | "ready" | "error";
 
 export type WorkspaceProgress = {
   profileReady: boolean;
@@ -147,6 +171,8 @@ export type WorkspaceStageKey =
   | "companyContext"
   | "companyResearch"
   | "marketSignals"
+  | "selectedEvidence"
+  | "positioningBrief"
   | "recommendation"
   | "generation";
 
@@ -186,7 +212,7 @@ export type WorkspaceRunTelemetry = {
   completedAt: string | null;
   durationMs: number | null;
 
-  language: "en" | "de" | null;
+  language: WorkspaceOutputLanguage | null;
   inputType: WorkspaceInputType;
 
   userGeography?: string | null;
@@ -210,12 +236,14 @@ export type WorkspaceState = {
   jobUrl: string;
   jobText: string;
 
-  profileStatus: "idle" | "loading" | "ready" | "error";
-  jobStatus: "idle" | "loading" | "ready" | "error";
-  finalStatus: "idle" | "loading" | "ready" | "error";
+  profileStatus: WorkspaceStepStatus;
+  jobStatus: WorkspaceStepStatus;
+  insightsStatus: WorkspaceStepStatus;
+  finalStatus: WorkspaceStepStatus;
 
   profileError: string | null;
   jobError: string | null;
+  insightsError: string | null;
   finalError: string | null;
 
   telemetry: WorkspaceRunTelemetry | null;

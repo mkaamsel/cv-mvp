@@ -87,18 +87,192 @@ type CandidateWorkspaceRow = {
   updated_at: string | null;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeStoredDocument(value: unknown): StoredDocument | null {
+  const doc = asRecord(value);
+  if (!doc) return null;
+
+  const fileName =
+    asString(doc.fileName) ??
+    asString(doc.name) ??
+    asString(doc.title) ??
+    "document";
+
+  const kind =
+    asString(doc.kind) ??
+    "other";
+
+  const text = typeof doc.text === "string" ? doc.text : "";
+  const description = typeof doc.description === "string" ? doc.description : "";
+
+  return {
+    fileName,
+    kind: kind as SourceKind,
+    text,
+    description,
+    isPrimary: Boolean(doc.isPrimary),
+  };
+}
+
+function normalizeDocuments(value: unknown): StoredDocument[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map(normalizeStoredDocument)
+    .filter((doc): doc is StoredDocument => Boolean(doc));
+}
+
+function normalizeCandidateProfile(value: unknown): CandidateProfile | null {
+  const profile = asRecord(value);
+  if (!profile) return null;
+
+  const roles = Array.isArray(profile.roles)
+    ? profile.roles
+        .map((item) => {
+          const role = asRecord(item);
+          if (!role) return null;
+
+          return {
+            title: asString(role.title) ?? "",
+            company: asString(role.company),
+            startDate: asString(role.startDate),
+            endDate: asString(role.endDate),
+            isCurrent: Boolean(role.isCurrent),
+            location: asString(role.location),
+            achievements: asStringArray(role.achievements),
+          };
+        })
+        .filter((item): item is CandidateRole => Boolean(item))
+    : [];
+
+  const languages = Array.isArray(profile.languages)
+    ? profile.languages
+        .map((item) => {
+          const language = asRecord(item);
+          if (!language) return null;
+
+          const label = asString(language.language);
+          if (!label) return null;
+
+          return {
+            language: label,
+            proficiency: asString(language.proficiency),
+          };
+        })
+        .filter((item): item is CandidateLanguage => Boolean(item))
+    : [];
+
+  const education = Array.isArray(profile.education)
+    ? profile.education
+        .map((item) => {
+          const entry = asRecord(item);
+          if (!entry) return null;
+
+          const degree = asString(entry.degree);
+          if (!degree) return null;
+
+          return {
+            degree,
+            field: asString(entry.field),
+            institution: asString(entry.institution),
+            endDate: asString(entry.endDate),
+          };
+        })
+        .filter((item): item is CandidateEducation => Boolean(item))
+    : [];
+
+  const certifications = Array.isArray(profile.certifications)
+    ? profile.certifications
+        .map((item) => {
+          const entry = asRecord(item);
+          if (!entry) return null;
+
+          const name = asString(entry.name);
+          if (!name) return null;
+
+          return {
+            name,
+            issuer: asString(entry.issuer),
+            date: asString(entry.date) ?? asString(entry.year),
+          };
+        })
+        .filter((item): item is CandidateCertification => Boolean(item))
+    : [];
+
+  const verifiedClaims = Array.isArray(profile.verifiedClaims)
+    ? profile.verifiedClaims
+        .map((item) => {
+          const entry = asRecord(item);
+          if (!entry) return null;
+
+          const claim = asString(entry.claim);
+          if (!claim) return null;
+
+          return {
+            claim,
+            evidence: asStringArray(entry.evidence),
+            confidence: entry.confidence === "medium" ? "medium" : "high",
+          };
+        })
+        .filter((item): item is VerifiedClaim => Boolean(item))
+    : [];
+
+  return {
+    fullName: asString(profile.fullName),
+    headline: asString(profile.headline),
+    summary: asString(profile.summary),
+    roles,
+    coreSkills: asStringArray(profile.coreSkills.length ? profile.coreSkills : profile.skills),
+    tools: asStringArray(profile.tools),
+    standards: asStringArray(profile.standards.length ? profile.standards : profile.domains),
+    industries: asStringArray(profile.industries),
+    languages,
+    education,
+    certifications,
+    leadershipSignals: asStringArray(profile.leadershipSignals),
+    strengths: asStringArray(profile.strengths),
+    constraints: asStringArray(profile.constraints),
+    verifiedClaims,
+    openQuestions: asStringArray(profile.openQuestions),
+  };
+}
+
 function mapWorkspaceRow(data: CandidateWorkspaceRow): CandidateWorkspace {
   return {
     userId: data.user_id,
-    profile: data.profile_json ?? null,
-    documents: data.documents_json ?? [],
-    meta: data.meta_json ?? {},
+    profile: normalizeCandidateProfile(data.profile_json),
+    documents: normalizeDocuments(data.documents_json),
+    meta:
+      data.meta_json && typeof data.meta_json === "object"
+        ? data.meta_json
+        : {},
     createdAt: data.created_at ?? null,
     updatedAt: data.updated_at ?? null,
   };
 }
 
-function buildInitialWorkspace(userId: string): Omit<CandidateWorkspaceRow, "created_at" | "updated_at"> {
+function buildInitialWorkspace(
+  userId: string,
+): Omit<CandidateWorkspaceRow, "created_at" | "updated_at"> {
   return {
     user_id: userId,
     profile_json: null,
@@ -131,14 +305,16 @@ export async function getCurrentUserId(): Promise<string> {
 }
 
 export async function loadCandidateWorkspace(
-  userId?: string
+  userId?: string,
 ): Promise<CandidateWorkspace | null> {
   const supabase = await createSupabaseServerClient();
   const resolvedUserId = userId ?? (await getCurrentUserId());
 
   const { data, error } = await supabase
     .from("candidate_workspaces")
-    .select("user_id, profile_json, documents_json, meta_json, created_at, updated_at")
+    .select(
+      "user_id, profile_json, documents_json, meta_json, created_at, updated_at",
+    )
     .eq("user_id", resolvedUserId)
     .maybeSingle<CandidateWorkspaceRow>();
 
@@ -154,7 +330,7 @@ export async function loadCandidateWorkspace(
 }
 
 export async function createInitialCandidateWorkspace(
-  userId?: string
+  userId?: string,
 ): Promise<CandidateWorkspace> {
   const supabase = await createSupabaseServerClient();
   const resolvedUserId = userId ?? (await getCurrentUserId());
@@ -164,7 +340,9 @@ export async function createInitialCandidateWorkspace(
   const { data, error } = await supabase
     .from("candidate_workspaces")
     .upsert(starter, { onConflict: "user_id" })
-    .select("user_id, profile_json, documents_json, meta_json, created_at, updated_at")
+    .select(
+      "user_id, profile_json, documents_json, meta_json, created_at, updated_at",
+    )
     .single<CandidateWorkspaceRow>();
 
   if (error) {
@@ -175,7 +353,7 @@ export async function createInitialCandidateWorkspace(
 }
 
 export async function loadOrCreateCandidateWorkspace(
-  userId?: string
+  userId?: string,
 ): Promise<CandidateWorkspace> {
   const resolvedUserId = userId ?? (await getCurrentUserId());
 
@@ -201,7 +379,7 @@ export async function saveCandidateWorkspace(input: {
     input.profile !== undefined ? input.profile : existing.profile ?? null;
 
   const documents =
-    input.documents !== undefined ? input.documents : existing.documents ?? [];
+    input.documents !== undefined ? normalizeDocuments(input.documents) : existing.documents ?? [];
 
   const meta = {
     ...(existing.meta ?? {}),
@@ -218,9 +396,11 @@ export async function saveCandidateWorkspace(input: {
         documents_json: documents,
         meta_json: meta,
       },
-      { onConflict: "user_id" }
+      { onConflict: "user_id" },
     )
-    .select("user_id, profile_json, documents_json, meta_json, created_at, updated_at")
+    .select(
+      "user_id, profile_json, documents_json, meta_json, created_at, updated_at",
+    )
     .single<CandidateWorkspaceRow>();
 
   if (error) {

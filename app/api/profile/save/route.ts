@@ -1,3 +1,4 @@
+import { NextResponse } from "next/server";
 import {
   saveCandidateWorkspace,
   type CandidateProfile,
@@ -29,44 +30,101 @@ type SaveProfileError = {
   error: string;
 };
 
-function jsonResponse(body: SaveProfileSuccess | SaveProfileError, status = 200): Response {
-  return Response.json(body, {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-    },
-  });
+function normalizeDocuments(value: unknown): StoredDocument[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+
+      const doc = item as Record<string, unknown>;
+
+      return {
+        fileName:
+          typeof doc.fileName === "string"
+            ? doc.fileName.trim()
+            : typeof doc.name === "string"
+            ? doc.name.trim()
+            : "document",
+        kind:
+          typeof doc.kind === "string" && doc.kind.trim()
+            ? doc.kind.trim()
+            : "other",
+        text: typeof doc.text === "string" ? doc.text : "",
+        description:
+          typeof doc.description === "string" ? doc.description : "",
+        isPrimary: Boolean(doc.isPrimary),
+      } satisfies StoredDocument;
+    })
+    .filter((doc): doc is StoredDocument => Boolean(doc));
+}
+
+function normalizeMeta(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
 }
 
 export async function POST(request: Request): Promise<Response> {
   try {
     const body = (await request.json()) as SaveProfileRequest;
 
+    const profile =
+      body.profile && typeof body.profile === "object" ? body.profile : null;
+
+    const documents = normalizeDocuments(body.documents);
+    const meta = normalizeMeta(body.meta);
+
     const workspace = await saveCandidateWorkspace({
-      profile: body.profile,
-      documents: body.documents,
-      meta: body.meta,
+      profile,
+      documents,
+      meta,
     });
 
-    return jsonResponse({
+    const response: SaveProfileSuccess = {
       ok: true,
       workspace: {
-        profile: workspace.profile,
-        documents: workspace.documents,
-        meta: workspace.meta,
-        createdAt: workspace.createdAt,
-        updatedAt: workspace.updatedAt,
+        profile: workspace.profile ?? null,
+        documents: Array.isArray(workspace.documents)
+          ? workspace.documents
+          : [],
+        meta:
+          workspace.meta && typeof workspace.meta === "object"
+            ? workspace.meta
+            : {},
+        createdAt:
+          typeof workspace.createdAt === "string"
+            ? workspace.createdAt
+            : null,
+        updatedAt:
+          typeof workspace.updatedAt === "string"
+            ? workspace.updatedAt
+            : null,
+      },
+    };
+
+    return NextResponse.json(response, {
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store",
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown server error.";
+    const message =
+      error instanceof Error ? error.message : "Unknown server error.";
 
-    return jsonResponse(
-      {
-        ok: false,
-        error: message,
+    const response: SaveProfileError = {
+      ok: false,
+      error: message,
+    };
+
+    return NextResponse.json(response, {
+      status: 500,
+      headers: {
+        "Cache-Control": "no-store",
       },
-      500
-    );
+    });
   }
 }

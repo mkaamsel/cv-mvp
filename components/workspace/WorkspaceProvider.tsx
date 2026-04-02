@@ -23,6 +23,7 @@ import type {
   WorkspaceStageTelemetry,
   WorkspaceState,
   WorkspaceStepKey,
+  WorkspaceStepStatus,
 } from "@/lib/workspace/types";
 
 type WorkspaceContextValue = {
@@ -37,12 +38,14 @@ type WorkspaceContextValue = {
   setInsights: (insights: WorkspaceInsights | null) => void;
   setFinalDrafts: (drafts: WorkspaceFinalDrafts | null) => void;
 
-  setProfileStatus: (status: WorkspaceState["profileStatus"]) => void;
-  setJobStatus: (status: WorkspaceState["jobStatus"]) => void;
-  setFinalStatus: (status: WorkspaceState["finalStatus"]) => void;
+  setProfileStatus: (status: WorkspaceStepStatus) => void;
+  setJobStatus: (status: WorkspaceStepStatus) => void;
+  setInsightsStatus: (status: WorkspaceStepStatus) => void;
+  setFinalStatus: (status: WorkspaceStepStatus) => void;
 
   setProfileError: (message: string | null) => void;
   setJobError: (message: string | null) => void;
+  setInsightsError: (message: string | null) => void;
   setFinalError: (message: string | null) => void;
 
   startTelemetryRun: (payload: {
@@ -61,7 +64,7 @@ type WorkspaceContextValue = {
       error?: string;
       warnings?: string[];
       errors?: string[];
-    }
+    },
   ) => void;
 
   addTelemetryWarning: (message: string) => void;
@@ -101,6 +104,8 @@ const STAGE_ORDER: WorkspaceStageKey[] = [
   "companyContext",
   "companyResearch",
   "marketSignals",
+  "selectedEvidence",
+  "positioningBrief",
   "recommendation",
   "generation",
 ];
@@ -128,7 +133,7 @@ function createEmptyTelemetry(): WorkspaceRunTelemetry {
         durationMs: null,
         warnings: [],
         errors: [],
-      })
+      }),
     ),
   };
 }
@@ -145,10 +150,12 @@ const initialState: WorkspaceState = {
 
   profileStatus: "idle",
   jobStatus: "idle",
+  insightsStatus: "idle",
   finalStatus: "idle",
 
   profileError: null,
   jobError: null,
+  insightsError: null,
   finalError: null,
 
   telemetry: null,
@@ -164,6 +171,15 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function isStepStatus(value: unknown): value is WorkspaceStepStatus {
+  return (
+    value === "idle" ||
+    value === "loading" ||
+    value === "ready" ||
+    value === "error"
+  );
 }
 
 function isStageOutcome(value: unknown): value is WorkspaceStageOutcome {
@@ -219,9 +235,12 @@ function restoreTelemetry(value: unknown): WorkspaceRunTelemetry | null {
             return {
               stage,
               status,
-              startedAt: typeof item.startedAt === "string" ? item.startedAt : null,
-              completedAt: typeof item.completedAt === "string" ? item.completedAt : null,
-              durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+              startedAt:
+                typeof item.startedAt === "string" ? item.startedAt : null,
+              completedAt:
+                typeof item.completedAt === "string" ? item.completedAt : null,
+              durationMs:
+                typeof item.durationMs === "number" ? item.durationMs : null,
               warnings: asStringArray(item.warnings),
               errors: asStringArray(item.errors),
             };
@@ -248,12 +267,16 @@ function restoreTelemetry(value: unknown): WorkspaceRunTelemetry | null {
   return {
     runId: typeof value.runId === "string" ? value.runId : null,
     startedAt: typeof value.startedAt === "string" ? value.startedAt : null,
-    completedAt: typeof value.completedAt === "string" ? value.completedAt : null,
+    completedAt:
+      typeof value.completedAt === "string" ? value.completedAt : null,
     durationMs: typeof value.durationMs === "number" ? value.durationMs : null,
-    language: value.language === "en" || value.language === "de" ? value.language : null,
+    language:
+      value.language === "en" || value.language === "de" ? value.language : null,
     inputType: isInputType(value.inputType) ? value.inputType : "unknown",
-    userGeography: typeof value.userGeography === "string" ? value.userGeography : null,
-    jobGeography: typeof value.jobGeography === "string" ? value.jobGeography : null,
+    userGeography:
+      typeof value.userGeography === "string" ? value.userGeography : null,
+    jobGeography:
+      typeof value.jobGeography === "string" ? value.jobGeography : null,
     outcome: isRunOutcome(value.outcome) ? value.outcome : "pending",
     degradedReasons: asStringArray(value.degradedReasons),
     warnings: asStringArray(value.warnings),
@@ -268,7 +291,8 @@ function restoreWorkspaceState(input: unknown): WorkspaceState {
   }
 
   return {
-    candidateProfile: (input.candidateProfile as WorkspaceCandidateProfile | null) ?? null,
+    candidateProfile:
+      (input.candidateProfile as WorkspaceCandidateProfile | null) ?? null,
     jobProfile: (input.jobProfile as WorkspaceJobProfile | null) ?? null,
     insights: (input.insights as WorkspaceInsights | null) ?? null,
     finalDrafts: (input.finalDrafts as WorkspaceFinalDrafts | null) ?? null,
@@ -277,29 +301,20 @@ function restoreWorkspaceState(input: unknown): WorkspaceState {
     jobUrl: typeof input.jobUrl === "string" ? input.jobUrl : "",
     jobText: typeof input.jobText === "string" ? input.jobText : "",
 
-    profileStatus:
-      input.profileStatus === "loading" ||
-      input.profileStatus === "ready" ||
-      input.profileStatus === "error"
-        ? input.profileStatus
-        : "idle",
+    profileStatus: isStepStatus(input.profileStatus)
+      ? input.profileStatus
+      : "idle",
+    jobStatus: isStepStatus(input.jobStatus) ? input.jobStatus : "idle",
+    insightsStatus: isStepStatus(input.insightsStatus)
+      ? input.insightsStatus
+      : "idle",
+    finalStatus: isStepStatus(input.finalStatus) ? input.finalStatus : "idle",
 
-    jobStatus:
-      input.jobStatus === "loading" ||
-      input.jobStatus === "ready" ||
-      input.jobStatus === "error"
-        ? input.jobStatus
-        : "idle",
-
-    finalStatus:
-      input.finalStatus === "loading" ||
-      input.finalStatus === "ready" ||
-      input.finalStatus === "error"
-        ? input.finalStatus
-        : "idle",
-
-    profileError: typeof input.profileError === "string" ? input.profileError : null,
+    profileError:
+      typeof input.profileError === "string" ? input.profileError : null,
     jobError: typeof input.jobError === "string" ? input.jobError : null,
+    insightsError:
+      typeof input.insightsError === "string" ? input.insightsError : null,
     finalError: typeof input.finalError === "string" ? input.finalError : null,
 
     telemetry: restoreTelemetry(input.telemetry),
@@ -309,9 +324,8 @@ function restoreWorkspaceState(input: unknown): WorkspaceState {
 function deriveProgress(state: WorkspaceState): WorkspaceProgress {
   const profileReady = !!state.candidateProfile;
   const jobReady = !!state.jobProfile;
-
-  const insightsReady = !!state.insights || !!state.jobProfile;
-  const finalReady = profileReady && jobReady;
+  const insightsReady = !!state.insights;
+  const finalReady = !!state.finalDrafts;
 
   let nextStep: WorkspaceStepKey = "profile";
 
@@ -319,10 +333,10 @@ function deriveProgress(state: WorkspaceState): WorkspaceProgress {
     nextStep = "profile";
   } else if (!jobReady) {
     nextStep = "job";
-  } else if (!state.finalDrafts) {
-    nextStep = "final";
-  } else {
+  } else if (!insightsReady) {
     nextStep = "insights";
+  } else {
+    nextStep = "final";
   }
 
   return {
@@ -334,7 +348,9 @@ function deriveProgress(state: WorkspaceState): WorkspaceProgress {
   };
 }
 
-function normalizeLoadedProfile(value: unknown): WorkspaceCandidateProfile | null {
+function normalizeLoadedProfile(
+  value: unknown,
+): WorkspaceCandidateProfile | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -379,7 +395,7 @@ function normalizeLoadedDocuments(value: unknown): string[] {
 function mergeLoadedWorkspace(
   current: WorkspaceState,
   loadedProfile: WorkspaceCandidateProfile | null,
-  loadedFiles: string[]
+  loadedFiles: string[],
 ): WorkspaceState {
   const shouldUseLoadedProfile = !current.candidateProfile && loadedProfile;
   const mergedFiles =
@@ -387,7 +403,9 @@ function mergeLoadedWorkspace(
 
   return {
     ...current,
-    candidateProfile: shouldUseLoadedProfile ? loadedProfile : current.candidateProfile,
+    candidateProfile: shouldUseLoadedProfile
+      ? loadedProfile
+      : current.candidateProfile,
     uploadedFiles: mergedFiles,
     profileStatus:
       shouldUseLoadedProfile || current.candidateProfile
@@ -401,7 +419,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function computeDurationMs(startedAt?: string | null, completedAt?: string | null): number | null {
+function computeDurationMs(
+  startedAt?: string | null,
+  completedAt?: string | null,
+): number | null {
   if (!startedAt || !completedAt) return null;
 
   const start = new Date(startedAt).getTime();
@@ -420,7 +441,7 @@ function updateStageCollection(
     error?: string;
     warnings?: string[];
     errors?: string[];
-  }
+  },
 ): WorkspaceRunTelemetry {
   const currentTime = nowIso();
 
@@ -432,7 +453,7 @@ function updateStageCollection(
       const nextStatus: WorkspaceStageOutcome = patch.status ?? item.status;
 
       const startedAt =
-        item.startedAt || nextStatus === "processing"
+        nextStatus === "processing"
           ? item.startedAt || currentTime
           : item.startedAt;
 
@@ -449,7 +470,7 @@ function updateStageCollection(
           ...(item.warnings || []),
           ...(patch.warnings || []),
           ...(patch.warning ? [patch.warning] : []),
-        ])
+        ]),
       );
 
       const errors = Array.from(
@@ -457,7 +478,7 @@ function updateStageCollection(
           ...(item.errors || []),
           ...(patch.errors || []),
           ...(patch.error ? [patch.error] : []),
-        ])
+        ]),
       );
 
       return {
@@ -545,12 +566,18 @@ export default function WorkspaceProvider({
           return;
         }
 
-        const loadedProfile = normalizeLoadedProfile(data.workspace?.profile ?? null);
-        const loadedFiles = normalizeLoadedDocuments(data.workspace?.documents ?? []);
+        const loadedProfile = normalizeLoadedProfile(
+          data.workspace?.profile ?? null,
+        );
+        const loadedFiles = normalizeLoadedDocuments(
+          data.workspace?.documents ?? [],
+        );
 
         if (cancelled) return;
 
-        setState((current) => mergeLoadedWorkspace(current, loadedProfile, loadedFiles));
+        setState((current) =>
+          mergeLoadedWorkspace(current, loadedProfile, loadedFiles),
+        );
       } catch {
         if (cancelled) return;
 
@@ -586,7 +613,7 @@ export default function WorkspaceProvider({
         jobError: null,
       }));
     },
-    []
+    [],
   );
 
   const setCandidateProfile = useCallback(
@@ -596,19 +623,22 @@ export default function WorkspaceProvider({
         candidateProfile: profile,
         profileStatus: profile ? "ready" : "idle",
         profileError: null,
-
-        jobProfile: profile ? current.jobProfile : null,
-        insights: profile ? current.insights : null,
-        finalDrafts: profile ? current.finalDrafts : null,
-
-        jobStatus: profile ? current.jobStatus : "idle",
-        finalStatus: profile ? current.finalStatus : "idle",
-
-        jobError: profile ? current.jobError : null,
-        finalError: profile ? current.finalError : null,
+        ...(profile
+          ? {}
+          : {
+              jobProfile: null,
+              insights: null,
+              finalDrafts: null,
+              jobStatus: "idle" as const,
+              insightsStatus: "idle" as const,
+              finalStatus: "idle" as const,
+              jobError: null,
+              insightsError: null,
+              finalError: null,
+            }),
       }));
     },
-    []
+    [],
   );
 
   const setJobProfile = useCallback((job: WorkspaceJobProfile | null) => {
@@ -617,11 +647,16 @@ export default function WorkspaceProvider({
       jobProfile: job,
       jobStatus: job ? "ready" : "idle",
       jobError: null,
-
-      insights: null,
-      finalDrafts: null,
-      finalStatus: "idle",
-      finalError: null,
+      ...(job
+        ? {}
+        : {
+            insights: null,
+            finalDrafts: null,
+            insightsStatus: "idle" as const,
+            finalStatus: "idle" as const,
+            insightsError: null,
+            finalError: null,
+          }),
     }));
   }, []);
 
@@ -629,6 +664,15 @@ export default function WorkspaceProvider({
     setState((current) => ({
       ...current,
       insights,
+      insightsStatus: insights ? "ready" : "idle",
+      insightsError: null,
+      ...(insights
+        ? {}
+        : {
+            finalDrafts: null,
+            finalStatus: "idle" as const,
+            finalError: null,
+          }),
     }));
   }, []);
 
@@ -641,32 +685,33 @@ export default function WorkspaceProvider({
     }));
   }, []);
 
-  const setProfileStatus = useCallback(
-    (status: WorkspaceState["profileStatus"]) => {
-      setState((current) => ({
-        ...current,
-        profileStatus: status,
-      }));
-    },
-    []
-  );
+  const setProfileStatus = useCallback((status: WorkspaceStepStatus) => {
+    setState((current) => ({
+      ...current,
+      profileStatus: status,
+    }));
+  }, []);
 
-  const setJobStatus = useCallback((status: WorkspaceState["jobStatus"]) => {
+  const setJobStatus = useCallback((status: WorkspaceStepStatus) => {
     setState((current) => ({
       ...current,
       jobStatus: status,
     }));
   }, []);
 
-  const setFinalStatus = useCallback(
-    (status: WorkspaceState["finalStatus"]) => {
-      setState((current) => ({
-        ...current,
-        finalStatus: status,
-      }));
-    },
-    []
-  );
+  const setInsightsStatus = useCallback((status: WorkspaceStepStatus) => {
+    setState((current) => ({
+      ...current,
+      insightsStatus: status,
+    }));
+  }, []);
+
+  const setFinalStatus = useCallback((status: WorkspaceStepStatus) => {
+    setState((current) => ({
+      ...current,
+      finalStatus: status,
+    }));
+  }, []);
 
   const setProfileError = useCallback((message: string | null) => {
     setState((current) => ({
@@ -681,6 +726,14 @@ export default function WorkspaceProvider({
       ...current,
       jobError: message,
       jobStatus: message ? "error" : current.jobStatus,
+    }));
+  }, []);
+
+  const setInsightsError = useCallback((message: string | null) => {
+    setState((current) => ({
+      ...current,
+      insightsError: message,
+      insightsStatus: message ? "error" : current.insightsStatus,
     }));
   }, []);
 
@@ -715,7 +768,7 @@ export default function WorkspaceProvider({
         },
       }));
     },
-    []
+    [],
   );
 
   const updateTelemetryStage = useCallback(
@@ -727,7 +780,7 @@ export default function WorkspaceProvider({
         error?: string;
         warnings?: string[];
         errors?: string[];
-      }
+      },
     ) => {
       setState((current) => {
         const telemetry = current.telemetry ?? createEmptyTelemetry();
@@ -738,7 +791,7 @@ export default function WorkspaceProvider({
         };
       });
     },
-    []
+    [],
   );
 
   const addTelemetryWarning = useCallback((message: string) => {
@@ -784,7 +837,7 @@ export default function WorkspaceProvider({
         telemetry: {
           ...telemetry,
           degradedReasons: Array.from(
-            new Set([...telemetry.degradedReasons, reason.trim()])
+            new Set([...telemetry.degradedReasons, reason.trim()]),
           ),
         },
       };
@@ -809,7 +862,7 @@ export default function WorkspaceProvider({
         };
       });
     },
-    []
+    [],
   );
 
   const resetTelemetry = useCallback(() => {
@@ -847,9 +900,11 @@ export default function WorkspaceProvider({
       setFinalDrafts,
       setProfileStatus,
       setJobStatus,
+      setInsightsStatus,
       setFinalStatus,
       setProfileError,
       setJobError,
+      setInsightsError,
       setFinalError,
       startTelemetryRun,
       updateTelemetryStage,
@@ -872,9 +927,11 @@ export default function WorkspaceProvider({
       setFinalDrafts,
       setProfileStatus,
       setJobStatus,
+      setInsightsStatus,
       setFinalStatus,
       setProfileError,
       setJobError,
+      setInsightsError,
       setFinalError,
       startTelemetryRun,
       updateTelemetryStage,
@@ -885,7 +942,7 @@ export default function WorkspaceProvider({
       resetTelemetry,
       getStepHref,
       resetWorkspace,
-    ]
+    ],
   );
 
   return (
