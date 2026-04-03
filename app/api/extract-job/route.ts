@@ -217,6 +217,7 @@ function isLikelyNoiseLine(line: string) {
     /^über uns$/,
     /^benefits$/,
     /^was wir bieten$/,
+    /^wir bieten$/,
     /^contact$/,
     /^kontakt$/,
     /^imprint$/,
@@ -229,6 +230,9 @@ function isLikelyNoiseLine(line: string) {
     /^sign in$/,
     /^log in$/,
     /^register$/,
+    /^home$/,
+    /^jobs$/,
+    /^karriere$/,
   ];
 
   return noisePatterns.some((pattern) => pattern.test(lower));
@@ -238,62 +242,109 @@ function isWeakLine(line: string) {
   return line.length < 12 || isLikelyNoiseLine(line);
 }
 
-function detectCompany(text: string) {
-  const lines = getLines(text, 50);
-
-  const companyHints = lines.find(
-    (line) =>
-      /gmbh|ag|se|kg|mbh|inc|ltd|llc|company|unternehmen|group|holding/i.test(
-        line
-      ) && line.length < 120
+function isSectionHeading(line: string) {
+  return /^(responsibilities|tasks|your tasks|your responsibilities|aufgaben|ihre aufgaben|tätigkeiten|requirements|qualifications|your profile|ihr profil|profil|anforderungen|qualifikation|qualifikationen|what you bring|was sie mitbringen|was bringst du mit|your skills and experience|skills and experience|benefits|about us|über uns|was wir bieten|wir bieten|what we offer|offer|angebote|bewerbung|application|contact|kontakt|why join|standort|location)$/i.test(
+    line.trim()
   );
+}
 
-  return companyHints || "";
+function isLikelyCompanyLine(line: string) {
+  const lower = line.toLowerCase();
+
+  if (line.length < 2 || line.length > 120) return false;
+  if (isSectionHeading(line) || isLikelyNoiseLine(line)) return false;
+
+  return (
+    /gmbh|ag|se|kg|mbh|inc\.?|ltd\.?|llc|group|holding|company/i.test(line) ||
+    /^bei\s+.+/i.test(line) ||
+    /^about\s+.+/i.test(lower)
+  );
+}
+
+function isLikelyLocationLine(line: string) {
+  const lower = line.toLowerCase();
+
+  if (line.length < 2 || line.length > 120) return false;
+  if (isSectionHeading(line) || isLikelyNoiseLine(line)) return false;
+
+  return /(^|\b)(remote|hybrid|onsite|vor ort|deutschland|germany|nrw|nordrhein-westfalen|düsseldorf|duesseldorf|berlin|münchen|munich|hamburg|köln|cologne|frankfurt|neuss|essen|stuttgart|hannover|bremen|dortmund|bochum|leipzig)(\b|$)/i.test(
+    lower
+  );
+}
+
+function isLikelyRoleTitleLine(line: string) {
+  const lower = line.toLowerCase();
+
+  if (line.length < 4 || line.length > 120) return false;
+  if (isSectionHeading(line) || isLikelyNoiseLine(line)) return false;
+
+  if (
+    lower.includes("verantwortung für") ||
+    lower.includes("zuständig für") ||
+    lower.includes("idealerweise") ||
+    lower.includes("mehrjährige berufserfahrung") ||
+    lower.includes("ausbildung") ||
+    lower.includes("studium") ||
+    lower.includes("deutschkenntnisse") ||
+    lower.includes("englischkenntnisse") ||
+    lower.includes("zusammenarbeit mit") ||
+    lower.includes("ansprechpartner") ||
+    lower.includes("mitwirkung an") ||
+    lower.includes("erstellung von") ||
+    lower.includes("betreuung der") ||
+    lower.includes("überwachung der")
+  ) {
+    return false;
+  }
+
+  return /account|finance|controller|buchhalter|accountant|reporting|manager|lead|specialist|analyst|leiter|head|director|referent|bilanzbuchhalter|controlling/i.test(
+    lower
+  );
+}
+
+function detectCompany(text: string) {
+  const lines = getLines(text, 40);
+  const companyLine = lines.find(isLikelyCompanyLine);
+  return companyLine || "";
 }
 
 function detectRole(text: string) {
-  const lines = getLines(text, 40);
-
-  const rolePatterns =
-    /account|finance|controller|buchhalter|accountant|reporting|manager|lead|specialist|analyst|leiter|head|director|referent|bilanzbuchhalter|controlling/i;
-
-  const roleLine = lines.find(
-    (line) => rolePatterns.test(line) && line.length < 140
-  );
-
+  const lines = getLines(text, 30);
+  const roleLine = lines.find(isLikelyRoleTitleLine);
   return roleLine || "";
 }
 
 function detectLocation(text: string) {
-  const lines = getLines(text, 50);
-
-  const locationLine = lines.find(
-    (line) =>
-      /remote|hybrid|onsite|deutschland|germany|düsseldorf|duesseldorf|berlin|münchen|munich|hamburg|köln|cologne|frankfurt|neuss|essen|stuttgart/i.test(
-        line
-      ) && line.length < 120
-  );
-
+  const lines = getLines(text, 40);
+  const locationLine = lines.find(isLikelyLocationLine);
   return locationLine || "";
 }
 
 function collectBulletsFromSection(
   text: string,
-  sectionPatterns: RegExp[]
+  sectionPatterns: RegExp[],
+  stopPatterns?: RegExp[]
 ): string[] {
   const lines = getLines(text);
   const results: string[] = [];
   let collecting = false;
+
+  const defaultStopPatterns = [
+    /^(benefits|about us|über uns|was wir bieten|wir bieten|contact|kontakt|bewerbung|application|why join|what we offer|offer|angebote)$/i,
+    /^(responsibilities|tasks|your tasks|your responsibilities|aufgaben|ihre aufgaben|tätigkeiten)$/i,
+    /^(requirements|qualifications|your profile|ihr profil|profil|anforderungen|qualifikation|qualifikationen|what you bring|was sie mitbringen|was bringst du mit|your skills and experience|skills and experience)$/i,
+  ];
+
+  const effectiveStopPatterns = stopPatterns ?? defaultStopPatterns;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     const lower = line.toLowerCase();
 
     const startsSection = sectionPatterns.some((pattern) => pattern.test(lower));
-    const startsOtherSection =
-      /^(benefits|about us|über uns|was wir bieten|your profile|ihr profil|requirements|anforderungen|qualifications|responsibilities|aufgaben|tasks|contact|bewerbung|application|why join|wir bieten|what we offer|offer|angebote)$/i.test(
-        lower
-      );
+    const startsOtherSection = effectiveStopPatterns.some((pattern) =>
+      pattern.test(lower)
+    );
 
     if (startsSection) {
       collecting = true;
@@ -306,39 +357,38 @@ function collectBulletsFromSection(
 
     if (!collecting) continue;
 
+    const cleaned = normalizeBullet(line);
+
     const isBulletLike =
-      /^[•\-*]/.test(line) || /^\d+\./.test(line) || line.length > 45;
+      /^[•\-*]/.test(line) ||
+      /^\d+\./.test(line) ||
+      (cleaned.length >= 25 && cleaned.length <= 280);
 
     if (!isBulletLike) continue;
-
-    const cleaned = normalizeBullet(line);
 
     if (
       cleaned &&
       cleaned.length >= 18 &&
       cleaned.length <= 280 &&
-      !isLikelyNoiseLine(cleaned)
+      !isLikelyNoiseLine(cleaned) &&
+      !isSectionHeading(cleaned)
     ) {
       results.push(cleaned);
     }
 
-    if (results.length >= 10) {
-      break;
-    }
+    if (results.length >= 12) break;
   }
 
-  return dedupeStrings(results).slice(0, 8);
+  return dedupeStrings(results).slice(0, 10);
 }
 
 function deriveSummary(text: string) {
   const lines = getLines(text, 80).filter(
     (line) =>
       !isLikelyNoiseLine(line) &&
+      !isSectionHeading(line) &&
       line.length >= 40 &&
-      line.length <= 240 &&
-      !/^(responsibilities|tasks|aufgaben|requirements|qualifications|your profile|ihr profil)$/i.test(
-        line
-      )
+      line.length <= 240
   );
 
   const summaryLines = dedupeStrings(lines).slice(0, 4);
@@ -350,8 +400,9 @@ function filterArray(items: string[]) {
     items
       .map(normalizeBullet)
       .filter((item) => !isWeakLine(item))
+      .filter((item) => !isSectionHeading(item))
       .filter((item) => item.length <= 280)
-  ).slice(0, 8);
+  ).slice(0, 10);
 }
 
 function buildStructuredJob(extractedText: string): StructuredJob {
@@ -360,27 +411,47 @@ function buildStructuredJob(extractedText: string): StructuredJob {
   const location = detectLocation(extractedText);
 
   const responsibilities = filterArray(
-    collectBulletsFromSection(extractedText, [
-      /^responsibilities$/,
-      /^tasks$/,
-      /^your tasks$/,
-      /^your responsibilities$/,
-      /^aufgaben$/,
-      /^ihre aufgaben$/,
-      /^tätigkeiten$/,
-    ])
+    collectBulletsFromSection(
+      extractedText,
+      [
+        /^responsibilities$/,
+        /^tasks$/,
+        /^your tasks$/,
+        /^your responsibilities$/,
+        /^aufgaben$/,
+        /^ihre aufgaben$/,
+        /^tätigkeiten$/,
+      ],
+      [
+        /^(requirements|qualifications|your profile|ihr profil|profil|anforderungen|qualifikation|qualifikationen|what you bring|was sie mitbringen|was bringst du mit|your skills and experience|skills and experience)$/i,
+        /^(benefits|about us|über uns|was wir bieten|wir bieten|contact|kontakt|bewerbung|application|why join|what we offer|offer|angebote)$/i,
+      ]
+    )
   );
 
   const requirements = filterArray(
-    collectBulletsFromSection(extractedText, [
-      /^requirements$/,
-      /^qualifications$/,
-      /^your profile$/,
-      /^ihr profil$/,
-      /^anforderungen$/,
-      /^qualifikation$/,
-      /^what you bring$/,
-    ])
+    collectBulletsFromSection(
+      extractedText,
+      [
+        /^requirements$/,
+        /^qualifications$/,
+        /^your profile$/,
+        /^ihr profil$/,
+        /^profil$/,
+        /^anforderungen$/,
+        /^qualifikation$/,
+        /^qualifikationen$/,
+        /^what you bring$/,
+        /^was sie mitbringen$/,
+        /^was bringst du mit$/,
+        /^your skills and experience$/,
+        /^skills and experience$/,
+      ],
+      [
+        /^(benefits|about us|über uns|was wir bieten|wir bieten|contact|kontakt|bewerbung|application|why join|what we offer|offer|angebote)$/i,
+        /^(responsibilities|tasks|your tasks|your responsibilities|aufgaben|ihre aufgaben|tätigkeiten)$/i,
+      ]
+    )
   );
 
   const summary = deriveSummary(extractedText);
@@ -437,7 +508,12 @@ function validateStructuredJob(structuredJob: StructuredJob): ValidationResult {
     warnings.push("summary-thin");
   }
 
-  const hasCoreIdentity = Boolean(normalized.companyName || normalized.jobTitle);
+  const hasCoreIdentity = Boolean(
+    normalized.jobTitle ||
+      normalized.responsibilities.length > 0 ||
+      normalized.requirements.length > 0
+  );
+
   const hasSubstance =
     normalized.responsibilities.length > 0 ||
     normalized.requirements.length > 0 ||

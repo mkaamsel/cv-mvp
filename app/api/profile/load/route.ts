@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { loadOrCreateCandidateWorkspace } from "@/lib/profile/profile-store";
 
 export const runtime = "nodejs";
@@ -22,28 +23,58 @@ type LoadProfileError = {
 
 export async function GET(): Promise<Response> {
   try {
-    const workspace = await loadOrCreateCandidateWorkspace();
+    const supabase = await createSupabaseServerClient();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError) {
+      const response: LoadProfileError = {
+        ok: false,
+        error: authError.message,
+      };
+
+      return NextResponse.json(response, {
+        status: 401,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    if (!user) {
+      const response: LoadProfileError = {
+        ok: false,
+        error: "User not authenticated.",
+      };
+
+      return NextResponse.json(response, {
+        status: 401,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    const workspace = await loadOrCreateCandidateWorkspace(user.id);
 
     const response: LoadProfileSuccess = {
       ok: true,
       workspace: workspace
         ? {
             profile: workspace.profile ?? null,
-            documents: Array.isArray(workspace.documents)
-              ? workspace.documents
-              : [],
+            documents: Array.isArray(workspace.documents) ? workspace.documents : [],
             meta:
-              workspace.meta && typeof workspace.meta === "object"
+              workspace.meta &&
+              typeof workspace.meta === "object" &&
+              !Array.isArray(workspace.meta)
                 ? workspace.meta
                 : {},
             createdAt:
-              typeof workspace.createdAt === "string"
-                ? workspace.createdAt
-                : null,
+              typeof workspace.createdAt === "string" ? workspace.createdAt : null,
             updatedAt:
-              typeof workspace.updatedAt === "string"
-                ? workspace.updatedAt
-                : null,
+              typeof workspace.updatedAt === "string" ? workspace.updatedAt : null,
           }
         : null,
     };

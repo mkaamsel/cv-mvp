@@ -14,8 +14,6 @@ const openai = process.env.OPENAI_API_KEY
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
-type DebugConfig = Record<string, boolean>;
-
 type TailoringPipelineInput = {
   origin: string;
   cookieHeader?: string;
@@ -23,7 +21,6 @@ type TailoringPipelineInput = {
   jobDescriptionText?: string;
   outputLanguage?: "en" | "de" | string;
   candidateProfile?: Record<string, unknown> | null;
-  debugConfig?: DebugConfig;
 };
 
 type StructuredJob = {
@@ -100,20 +97,6 @@ type RecommendationPack = {
   riskAreas: string[];
   blockers: string[];
   recommendation: string;
-};
-
-type ReviewReport = {
-  truthCheck?: string;
-  unsupportedClaims?: string[];
-  relevanceScore?: number;
-  inflationRisk?: string;
-  weakEvidence?: string[];
-  clarityFixes?: number;
-};
-
-type ReviewResult = {
-  reviewReport?: ReviewReport;
-  improvedDraft?: string;
 };
 
 type BundleAssembly = {
@@ -196,20 +179,6 @@ type TailoringPipelineSuccess = {
     runId: string;
     outcome: "completed" | "completed_with_limitations";
     pipelineTrace: string[];
-    diagnostics: {
-      selectedEvidenceCount: number;
-      missingSignalsCount: number;
-      strongMatchesCount: number;
-      riskAreasCount: number;
-      review: {
-        cvTruthCheck: string | null;
-        cvRelevanceScore: number | null;
-        cvInflationRisk: string | null;
-        coverLetterTruthCheck: string | null;
-        coverLetterRelevanceScore: number | null;
-        coverLetterInflationRisk: string | null;
-      };
-    };
   };
 };
 
@@ -278,7 +247,7 @@ export type TailoringPipelineResult =
   | TailoringPipelineSuccess
   | TailoringPipelineError;
 
-const DEFAULT_ENGINE_SWITCHES = {
+const ENGINE_SWITCHES = {
   LAYER_1_ANALYSIS: true,
   LAYER_2_CANDIDATE_PROFILE_VIEW: true,
   LAYER_3_REQUIRED_PROFILE: true,
@@ -745,7 +714,7 @@ function mapAiRequiredProfileToInternal(
         (item) =>
           item?.category === "technical" ||
           item?.category === "tool" ||
-          item?.category === "domain",
+          item?.category === "domain"
       )
       .map((item) => asString(item?.competency) ?? "")
       .filter(Boolean),
@@ -757,7 +726,7 @@ function mapAiRequiredProfileToInternal(
     ...competencies
       .filter(
         (item) =>
-          item?.category === "behavioural" || item?.category === "stakeholder",
+          item?.category === "behavioural" || item?.category === "stakeholder"
       )
       .map((item) => asString(item?.competency) ?? "")
       .filter(Boolean),
@@ -1551,42 +1520,6 @@ function createRunId(): string {
   return `run_${Date.now()}`;
 }
 
-function normalizeReviewReport(input: unknown): ReviewReport | null {
-  const record = asRecord(input);
-  if (!record) return null;
-
-  const relevanceScoreRaw = record.relevanceScore;
-  const relevanceScore =
-    typeof relevanceScoreRaw === "number"
-      ? relevanceScoreRaw
-      : typeof relevanceScoreRaw === "string"
-        ? Number(relevanceScoreRaw)
-        : null;
-
-  const clarityFixesRaw = record.clarityFixes;
-  const clarityFixes =
-    typeof clarityFixesRaw === "number"
-      ? clarityFixesRaw
-      : typeof clarityFixesRaw === "string"
-        ? Number(clarityFixesRaw)
-        : null;
-
-  return {
-    truthCheck: asString(record.truthCheck) ?? undefined,
-    unsupportedClaims: asStringArray(record.unsupportedClaims),
-    relevanceScore:
-      relevanceScore !== null && Number.isFinite(relevanceScore)
-        ? relevanceScore
-        : undefined,
-    inflationRisk: asString(record.inflationRisk) ?? undefined,
-    weakEvidence: asStringArray(record.weakEvidence),
-    clarityFixes:
-      clarityFixes !== null && Number.isFinite(clarityFixes)
-        ? clarityFixes
-        : undefined,
-  };
-}
-
 export async function runTailoringPipeline({
   origin,
   cookieHeader = "",
@@ -1594,18 +1527,30 @@ export async function runTailoringPipeline({
   jobDescriptionText,
   outputLanguage,
   candidateProfile,
-  debugConfig,
 }: TailoringPipelineInput): Promise<TailoringPipelineResult> {
+  const pipelineTrace: string[] = [];
 
-  const ENGINE_SWITCHES = {
-    ...DEFAULT_ENGINE_SWITCHES,
-    ...(debugConfig ?? {}),
-  };
-const pipelineTrace: string[] = [];
-const normalizedJobUrl = asString(jobUrl) ?? "";
-const normalizedJobDescriptionText = asString(jobDescriptionText) ?? "";
-const normalizedOutputLanguage = normalizeLanguage(outputLanguage);
-const normalizedCandidateProfile = asRecord(candidateProfile);
+  const normalizedJobUrl = asString(jobUrl) ?? "";
+  const normalizedJobDescriptionText = asString(jobDescriptionText) ?? "";
+  const normalizedOutputLanguage = normalizeLanguage(outputLanguage);
+  const normalizedCandidateProfile = asRecord(candidateProfile);
+
+  if (!normalizedJobUrl && !normalizedJobDescriptionText) {
+    return {
+      ok: false,
+      status: 400,
+      message: "Please provide a job URL or pasted job description text.",
+    };
+  }
+
+  if (!ENGINE_SWITCHES.LAYER_1_ANALYSIS) {
+    return {
+      ok: false,
+      status: 500,
+      message: "Layer 1 analysis is disabled.",
+    };
+  }
+
   pipelineTrace.push("Layer1A: extract-job:start");
 
   const extractJobResponse = await safeFetchJson<{
@@ -2034,9 +1979,6 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   let reviewFindings: string | string[] | Record<string, unknown> =
     recommendation.reasoningSummary;
 
-  let cvReviewReport: ReviewReport | null = null;
-  let coverLetterReviewReport: ReviewReport | null = null;
-
   if (ENGINE_SWITCHES.LAYER_11_GENERATION) {
     pipelineTrace.push("Layer11A: cv-draft:start");
     cvDraft = buildCvDraft(normalizedCandidateProfile, bundle);
@@ -2080,54 +2022,24 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   if (ENGINE_SWITCHES.LAYER_12_REVIEW && ENGINE_SWITCHES.LAYER_12_REVIEW_AI) {
     pipelineTrace.push("Layer12A: review:start");
 
-    const cvReviewResult = await callAiJson<ReviewResult>(
+    const reviewedCv = await callAiText(
       buildReviewPrompt(cvDraft, bundle),
-      "Perform the review and return valid JSON only.",
+      "Improve this draft conservatively and return plain text only.",
     );
-
-    if (cvReviewResult?.improvedDraft) {
-      cvDraft = cvReviewResult.improvedDraft;
-      pipelineTrace.push("Layer12A: review:cv:improved");
-    } else {
-      pipelineTrace.push("Layer12A: review:cv:kept-original");
+    if (reviewedCv) {
+      cvDraft = reviewedCv;
     }
 
-    cvReviewReport = normalizeReviewReport(cvReviewResult?.reviewReport);
-    pipelineTrace.push(
-      cvReviewReport ? "Layer12A: review:cv:report" : "Layer12A: review:cv:no-report",
-    );
-
-    const coverLetterReviewResult = await callAiJson<ReviewResult>(
+    const reviewedCoverLetter = await callAiText(
       buildReviewPrompt(coverLetterDraft, bundle),
-      "Perform the review and return valid JSON only.",
+      "Improve this draft conservatively and return plain text only.",
     );
-
-    if (coverLetterReviewResult?.improvedDraft) {
-      coverLetterDraft = coverLetterReviewResult.improvedDraft;
-      pipelineTrace.push("Layer12A: review:cover-letter:improved");
-    } else {
-      pipelineTrace.push("Layer12A: review:cover-letter:kept-original");
+    if (reviewedCoverLetter) {
+      coverLetterDraft = reviewedCoverLetter;
     }
 
-    coverLetterReviewReport = normalizeReviewReport(
-      coverLetterReviewResult?.reviewReport,
-    );
-    pipelineTrace.push(
-      coverLetterReviewReport
-        ? "Layer12A: review:cover-letter:report"
-        : "Layer12A: review:cover-letter:no-report",
-    );
-
-    reviewFindings = {
-      cv: cvReviewReport,
-      coverLetter: coverLetterReviewReport,
-    };
-
-    pipelineTrace.push(
-      cvReviewResult || coverLetterReviewResult
-        ? "Layer12A: review:done"
-        : "Layer12A: review:fallback",
-    );
+    reviewFindings = recommendation.reasoningSummary || "AI review applied.";
+    pipelineTrace.push("Layer12A: review:done");
   }
 
   const warnings = Array.from(
@@ -2170,22 +2082,6 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
           ? "completed_with_limitations"
           : "completed",
       pipelineTrace,
-      diagnostics: {
-        selectedEvidenceCount: selectedEvidence.combinedTopEvidence.length,
-        missingSignalsCount: missingSignals.length,
-        strongMatchesCount: recommendation.strongMatches.length,
-        riskAreasCount: recommendation.riskAreas.length,
-        review: {
-          cvTruthCheck: cvReviewReport?.truthCheck ?? null,
-          cvRelevanceScore: cvReviewReport?.relevanceScore ?? null,
-          cvInflationRisk: cvReviewReport?.inflationRisk ?? null,
-          coverLetterTruthCheck: coverLetterReviewReport?.truthCheck ?? null,
-          coverLetterRelevanceScore:
-            coverLetterReviewReport?.relevanceScore ?? null,
-          coverLetterInflationRisk:
-            coverLetterReviewReport?.inflationRisk ?? null,
-        },
-      },
     },
   };
 }

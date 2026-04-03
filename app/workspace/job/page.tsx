@@ -11,6 +11,7 @@ import type {
   WorkspaceInsights,
   WorkspaceJobProfile,
   WorkspaceRunOutcome,
+  WorkspaceRunTelemetry,
 } from "@/lib/workspace/types";
 
 const t = designTokens;
@@ -22,10 +23,7 @@ type TailoringSuccessResponse = {
   structuredJob?: Record<string, unknown>;
   insights?: WorkspaceInsights;
   finalDrafts?: WorkspaceFinalDrafts;
-  telemetry?: {
-    runId?: string;
-    outcome?: WorkspaceRunOutcome;
-  };
+  telemetry?: WorkspaceRunTelemetry | null;
   message?: string;
   warnings?: string[];
   error?: string;
@@ -82,6 +80,7 @@ export default function WorkspaceJobPage() {
     addTelemetryError,
     addDegradedReason,
     finalizeTelemetryRun,
+    setTelemetrySnapshot,
   } = useWorkspace();
 
   const [jobText, setJobText] = useState(state.jobText || "");
@@ -170,7 +169,7 @@ export default function WorkspaceJobPage() {
         body: JSON.stringify(payload),
       });
 
-      const data = (await response.json()) as
+      const data = (await response.json()) as unknown as
         | TailoringSuccessResponse
         | TailoringErrorResponse;
 
@@ -221,27 +220,12 @@ export default function WorkspaceJobPage() {
       }
 
       const successData = data as TailoringSuccessResponse;
+      console.log("TAILORING SUCCESS DATA", successData);
+
+    
 
       for (const warning of successData.warnings ?? []) {
         addTelemetryWarning(warning);
-      }
-
-      if (successData.runId && successData.runId !== provisionalRunId) {
-        startTelemetryRun({
-          runId: successData.runId,
-          language: "en",
-          inputType,
-        });
-
-        updateTelemetryStage("jobExtraction", { status: "processing" });
-        updateTelemetryStage("requiredProfile", { status: "processing" });
-        updateTelemetryStage("companyContext", { status: "processing" });
-        updateTelemetryStage("companyResearch", { status: "processing" });
-        updateTelemetryStage("marketSignals", { status: "processing" });
-        updateTelemetryStage("selectedEvidence", { status: "processing" });
-        updateTelemetryStage("positioningBrief", { status: "processing" });
-        updateTelemetryStage("recommendation", { status: "processing" });
-        updateTelemetryStage("generation", { status: "processing" });
       }
 
       const nextJobProfile: WorkspaceJobProfile =
@@ -331,7 +315,9 @@ export default function WorkspaceJobPage() {
       setSuccessMessage("Job analysis completed. Moving to insights...");
 
       finalizeTelemetryRun({
-        outcome: successData.telemetry?.outcome ?? "completed",
+        outcome:
+          (successData.telemetry?.outcome as WorkspaceRunOutcome | undefined) ??
+          "completed",
       });
 
       router.push("/workspace/insights");

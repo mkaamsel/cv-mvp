@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   saveCandidateWorkspace,
   type CandidateProfile,
@@ -44,8 +45,8 @@ function normalizeDocuments(value: unknown): StoredDocument[] {
           typeof doc.fileName === "string"
             ? doc.fileName.trim()
             : typeof doc.name === "string"
-            ? doc.name.trim()
-            : "document",
+              ? doc.name.trim()
+              : "document",
         kind:
           typeof doc.kind === "string" && doc.kind.trim()
             ? doc.kind.trim()
@@ -69,6 +70,40 @@ function normalizeMeta(value: unknown): Record<string, unknown> {
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    const supabase = await createSupabaseServerClient();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError) {
+      const response: SaveProfileError = {
+        ok: false,
+        error: authError.message,
+      };
+
+      return NextResponse.json(response, {
+        status: 401,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    if (!user) {
+      const response: SaveProfileError = {
+        ok: false,
+        error: "User not authenticated.",
+      };
+
+      return NextResponse.json(response, {
+        status: 401,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     const body = (await request.json()) as SaveProfileRequest;
 
     const profile =

@@ -94,9 +94,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : null;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -105,6 +103,22 @@ function asStringArray(value: unknown): string[] {
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeSourceKind(value: unknown): SourceKind {
+  const kind = asString(value);
+
+  switch (kind) {
+    case "primary_cv":
+    case "additional_cv":
+    case "arbeitszeugnis":
+    case "certificate":
+    case "user_note":
+    case "other":
+      return kind;
+    default:
+      return "other";
+  }
 }
 
 function normalizeStoredDocument(value: unknown): StoredDocument | null {
@@ -117,16 +131,12 @@ function normalizeStoredDocument(value: unknown): StoredDocument | null {
     asString(doc.title) ??
     "document";
 
-  const kind =
-    asString(doc.kind) ??
-    "other";
-
   const text = typeof doc.text === "string" ? doc.text : "";
   const description = typeof doc.description === "string" ? doc.description : "";
 
   return {
     fileName,
-    kind: kind as SourceKind,
+    kind: normalizeSourceKind(doc.kind),
     text,
     description,
     isPrimary: Boolean(doc.isPrimary),
@@ -141,6 +151,18 @@ function normalizeDocuments(value: unknown): StoredDocument[] {
     .filter((doc): doc is StoredDocument => Boolean(doc));
 }
 
+function getArrayField(
+  profile: Record<string, unknown>,
+  primaryKey: string,
+  fallbackKey?: string
+): string[] {
+  const primary = asStringArray(profile[primaryKey]);
+  if (primary.length > 0) return primary;
+
+  if (!fallbackKey) return [];
+  return asStringArray(profile[fallbackKey]);
+}
+
 function normalizeCandidateProfile(value: unknown): CandidateProfile | null {
   const profile = asRecord(value);
   if (!profile) return null;
@@ -151,8 +173,11 @@ function normalizeCandidateProfile(value: unknown): CandidateProfile | null {
           const role = asRecord(item);
           if (!role) return null;
 
+          const title = asString(role.title);
+          if (!title) return null;
+
           return {
-            title: asString(role.title) ?? "",
+            title,
             company: asString(role.company),
             startDate: asString(role.startDate),
             endDate: asString(role.endDate),
@@ -241,18 +266,18 @@ function normalizeCandidateProfile(value: unknown): CandidateProfile | null {
     headline: asString(profile.headline),
     summary: asString(profile.summary),
     roles,
-    coreSkills: asStringArray(profile.coreSkills.length ? profile.coreSkills : profile.skills),
-    tools: asStringArray(profile.tools),
-    standards: asStringArray(profile.standards.length ? profile.standards : profile.domains),
-    industries: asStringArray(profile.industries),
+    coreSkills: getArrayField(profile, "coreSkills", "skills"),
+    tools: getArrayField(profile, "tools"),
+    standards: getArrayField(profile, "standards", "domains"),
+    industries: getArrayField(profile, "industries"),
     languages,
     education,
     certifications,
-    leadershipSignals: asStringArray(profile.leadershipSignals),
-    strengths: asStringArray(profile.strengths),
-    constraints: asStringArray(profile.constraints),
+    leadershipSignals: getArrayField(profile, "leadershipSignals"),
+    strengths: getArrayField(profile, "strengths"),
+    constraints: getArrayField(profile, "constraints"),
     verifiedClaims,
-    openQuestions: asStringArray(profile.openQuestions),
+    openQuestions: getArrayField(profile, "openQuestions"),
   };
 }
 
@@ -262,7 +287,7 @@ function mapWorkspaceRow(data: CandidateWorkspaceRow): CandidateWorkspace {
     profile: normalizeCandidateProfile(data.profile_json),
     documents: normalizeDocuments(data.documents_json),
     meta:
-      data.meta_json && typeof data.meta_json === "object"
+      data.meta_json && typeof data.meta_json === "object" && !Array.isArray(data.meta_json)
         ? data.meta_json
         : {},
     createdAt: data.created_at ?? null,
@@ -271,7 +296,7 @@ function mapWorkspaceRow(data: CandidateWorkspaceRow): CandidateWorkspace {
 }
 
 function buildInitialWorkspace(
-  userId: string,
+  userId: string
 ): Omit<CandidateWorkspaceRow, "created_at" | "updated_at"> {
   return {
     user_id: userId,
@@ -305,16 +330,14 @@ export async function getCurrentUserId(): Promise<string> {
 }
 
 export async function loadCandidateWorkspace(
-  userId?: string,
+  userId?: string
 ): Promise<CandidateWorkspace | null> {
   const supabase = await createSupabaseServerClient();
   const resolvedUserId = userId ?? (await getCurrentUserId());
 
   const { data, error } = await supabase
     .from("candidate_workspaces")
-    .select(
-      "user_id, profile_json, documents_json, meta_json, created_at, updated_at",
-    )
+    .select("user_id, profile_json, documents_json, meta_json, created_at, updated_at")
     .eq("user_id", resolvedUserId)
     .maybeSingle<CandidateWorkspaceRow>();
 
@@ -330,7 +353,7 @@ export async function loadCandidateWorkspace(
 }
 
 export async function createInitialCandidateWorkspace(
-  userId?: string,
+  userId?: string
 ): Promise<CandidateWorkspace> {
   const supabase = await createSupabaseServerClient();
   const resolvedUserId = userId ?? (await getCurrentUserId());
@@ -340,9 +363,7 @@ export async function createInitialCandidateWorkspace(
   const { data, error } = await supabase
     .from("candidate_workspaces")
     .upsert(starter, { onConflict: "user_id" })
-    .select(
-      "user_id, profile_json, documents_json, meta_json, created_at, updated_at",
-    )
+    .select("user_id, profile_json, documents_json, meta_json, created_at, updated_at")
     .single<CandidateWorkspaceRow>();
 
   if (error) {
@@ -353,7 +374,7 @@ export async function createInitialCandidateWorkspace(
 }
 
 export async function loadOrCreateCandidateWorkspace(
-  userId?: string,
+  userId?: string
 ): Promise<CandidateWorkspace> {
   const resolvedUserId = userId ?? (await getCurrentUserId());
 
@@ -376,14 +397,16 @@ export async function saveCandidateWorkspace(input: {
   const existing = await loadOrCreateCandidateWorkspace(userId);
 
   const profile =
-    input.profile !== undefined ? input.profile : existing.profile ?? null;
+    input.profile !== undefined ? normalizeCandidateProfile(input.profile) : existing.profile ?? null;
 
   const documents =
     input.documents !== undefined ? normalizeDocuments(input.documents) : existing.documents ?? [];
 
   const meta = {
     ...(existing.meta ?? {}),
-    ...(input.meta ?? {}),
+    ...((input.meta && typeof input.meta === "object" && !Array.isArray(input.meta))
+      ? input.meta
+      : {}),
     sourceCount: documents.filter((doc) => doc.text.trim()).length,
   };
 
@@ -396,11 +419,9 @@ export async function saveCandidateWorkspace(input: {
         documents_json: documents,
         meta_json: meta,
       },
-      { onConflict: "user_id" },
+      { onConflict: "user_id" }
     )
-    .select(
-      "user_id, profile_json, documents_json, meta_json, created_at, updated_at",
-    )
+    .select("user_id, profile_json, documents_json, meta_json, created_at, updated_at")
     .single<CandidateWorkspaceRow>();
 
   if (error) {

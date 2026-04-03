@@ -1,30 +1,60 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 
-const protectedPaths = ["/profile", "/tailoring"];
+const PROTECTED_PATHS = [
+  "/workspace",
+  "/analysis",
+  "/profile",
+  "/tailoring",
+];
+
+const AUTH_PAGES = ["/login", "/signup"];
+
+function getRequiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+function isProtectedPath(pathname: string): boolean {
+  return PROTECTED_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  );
+}
+
+function isAuthPage(pathname: string): boolean {
+  return AUTH_PAGES.includes(pathname);
+}
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({
     request,
   });
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            request.cookies.set(name, value);
-            response.cookies.set(name, value, options);
-          });
-        },
+  const supabaseUrl = getRequiredEnv("NEXT_PUBLIC_SUPABASE_URL");
+  const supabaseAnonKey = getRequiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(
+        cookiesToSet: Array<{
+          name: string;
+          value: string;
+          options?: CookieOptions;
+        }>
+      ) {
+        for (const { name, value, options } of cookiesToSet) {
+          request.cookies.set(name, value);
+          response.cookies.set(name, value, options);
+        }
       },
     },
-  );
+  });
 
   const {
     data: { user },
@@ -32,23 +62,26 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  const isProtected = protectedPaths.some(
-    (path) => pathname === path || pathname.startsWith(`${path}/`),
-  );
-
-  if (isProtected && !user) {
+  if (isProtectedPath(pathname) && !user) {
     const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  if ((pathname === "/login" || pathname === "/signup") && user) {
-    const profileUrl = new URL("/profile", request.url);
-    return NextResponse.redirect(profileUrl);
+  if (isAuthPage(pathname) && user) {
+    return NextResponse.redirect(new URL("/workspace/profile", request.url));
   }
 
   return response;
 }
 
 export const config = {
-  matcher: ["/login", "/signup", "/profile/:path*", "/tailoring/:path*"],
+  matcher: [
+    "/login",
+    "/signup",
+    "/workspace/:path*",
+    "/analysis/:path*",
+    "/profile/:path*",
+    "/tailoring/:path*",
+  ],
 };

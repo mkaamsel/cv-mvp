@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { designTokens } from "@/lib/design/tokens";
 
@@ -10,6 +10,7 @@ const t = designTokens;
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const [email, setEmail] = useState("");
@@ -20,6 +21,14 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  const redirectTarget = useMemo(() => {
+    const next = searchParams.get("next");
+    if (!next || !next.startsWith("/")) {
+      return "/workspace/profile";
+    }
+    return next;
+  }, [searchParams]);
+
   useEffect(() => {
     let active = true;
 
@@ -27,12 +36,18 @@ export default function LoginPage() {
       try {
         const {
           data: { session },
+          error: sessionError,
         } = await supabase.auth.getSession();
 
         if (!active) return;
 
+        if (sessionError) {
+          setError(sessionError.message);
+          return;
+        }
+
         if (session) {
-          router.replace("/profile");
+          router.replace("/workspace/profile");
           return;
         }
       } finally {
@@ -56,7 +71,7 @@ export default function LoginPage() {
     setSuccess("");
 
     try {
-      const normalizedEmail = email.trim();
+      const normalizedEmail = email.trim().toLowerCase();
 
       if (!normalizedEmail) {
         setError("Please enter your email address.");
@@ -74,6 +89,16 @@ export default function LoginPage() {
       });
 
       if (error) {
+        const message = error.message.toLowerCase();
+
+        if (
+          message.includes("email not confirmed") ||
+          message.includes("email not verified")
+        ) {
+          setError("Please verify your email address before logging in.");
+          return;
+        }
+
         setError("Invalid email or password.");
         return;
       }
@@ -84,7 +109,7 @@ export default function LoginPage() {
       }
 
       setSuccess("Login successful.");
-      router.replace("/profile");
+      router.replace(redirectTarget);
       router.refresh();
     } catch {
       setError("Something went wrong during login. Please try again.");

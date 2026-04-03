@@ -55,6 +55,13 @@ export async function POST(request: Request) {
       );
     }
 
+    if (stepTimeMs !== null && stepTimeMs < 0) {
+      return NextResponse.json(
+        { ok: false, error: "stepTimeMs must be a non-negative integer." },
+        { status: 400 }
+      );
+    }
+
     const supabase = await createSupabaseServerClient();
     const {
       data: { user },
@@ -75,6 +82,29 @@ export async function POST(request: Request) {
       );
     }
 
+    if (runId) {
+      const { data: run, error: runError } = await supabaseAdmin
+        .from("tailoring_runs")
+        .select("id, user_id")
+        .eq("id", runId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (runError) {
+        return NextResponse.json(
+          { ok: false, error: runError.message },
+          { status: 500 }
+        );
+      }
+
+      if (!run) {
+        return NextResponse.json(
+          { ok: false, error: "Invalid runId for this user." },
+          { status: 403 }
+        );
+      }
+    }
+
     const insertPayload = {
       run_id: runId,
       user_id: user.id,
@@ -89,7 +119,7 @@ export async function POST(request: Request) {
     const { data, error } = await supabaseAdmin
       .from("user_feedback")
       .insert(insertPayload)
-      .select("id, run_id, stage, stars, created_at")
+      .select("id, run_id, user_id, stage, stars, comment, page, step_time_ms, created_at")
       .single();
 
     if (error) {

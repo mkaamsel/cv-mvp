@@ -97,7 +97,7 @@ function WorkspaceTopBar({ pathname }: { pathname: string }) {
           <div style={{ flex: 1 }} />
 
           <Link
-            href="/debug"
+            href="/workspace/debug"
             style={{
               color: "#475569",
               textDecoration: "none",
@@ -109,7 +109,7 @@ function WorkspaceTopBar({ pathname }: { pathname: string }) {
           </Link>
 
           <Link
-            href="/observatory"
+            href="/workspace/observatory"
             style={{
               color: "#475569",
               textDecoration: "none",
