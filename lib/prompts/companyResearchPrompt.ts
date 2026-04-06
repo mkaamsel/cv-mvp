@@ -1,10 +1,8 @@
 export function buildCompanyResearchInstructions(
-  locale: "en" | "de"
+  locale: string
 ): string {
-  const languageHint =
-    locale === "de"
-      ? "Write summary and angles in German unless the evidence strongly supports English."
-      : "Write summary and angles in English unless the evidence strongly supports German.";
+  const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
+  const languageHint = `Write summary and angles in ${languageName}.`;
 
   return `
 You are the company-research layer inside an AI job application system.

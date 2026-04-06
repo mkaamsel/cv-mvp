@@ -104,7 +104,7 @@ export default function LoginPage() {
       }
 
       if (!data?.session || !data.user) {
-        setError("Login failed. No active session was created.");
+        setError("Something went wrong during login. Please try again.");
         return;
       }
 
@@ -426,7 +426,7 @@ export default function LoginPage() {
                 lineHeight: 1.6,
               }}
             >
-              Do not have an account yet?{" "}
+              Don&apos;t have an account yet?{" "}
               <Link
                 href="/signup"
                 style={{

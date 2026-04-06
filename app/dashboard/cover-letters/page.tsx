@@ -26,7 +26,7 @@ export default function CoverLetterListPage() {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      setMessage("You must be logged in.");
+      setMessage("Please sign in to access your cover letters.");
       return;
     }
 
@@ -37,7 +37,7 @@ export default function CoverLetterListPage() {
       .order("created_at", { ascending: false });
 
     if (error) {
-      setMessage("Failed to load cover letters.");
+      setMessage("We couldn't load your cover letters. Please try refreshing.");
       return;
     }
 
@@ -72,7 +72,7 @@ export default function CoverLetterListPage() {
     if (error) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "Failed to save changes.",
+        [id]: "We couldn't save that change. Please try again.",
       }));
       setSavingId(null);
       return;
@@ -96,7 +96,7 @@ export default function CoverLetterListPage() {
     if (!user) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "You must be logged in.",
+        [id]: "Please sign in to continue.",
       }));
       setCreatingVersionId(null);
       return;
@@ -112,7 +112,7 @@ export default function CoverLetterListPage() {
     if (error) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "Failed to create new version.",
+        [id]: "We couldn't create a new version. Please try again.",
       }));
       setCreatingVersionId(null);
       return;
@@ -138,7 +138,7 @@ export default function CoverLetterListPage() {
     if (error) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "Failed to delete cover letter.",
+        [id]: "We couldn't delete that cover letter. Please try again.",
       }));
       setDeletingId(null);
       return;

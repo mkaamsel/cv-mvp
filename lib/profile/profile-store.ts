@@ -50,7 +50,24 @@ export type VerifiedClaim = {
   confidence: "high" | "medium";
 };
 
+// Correction log — user corrections are the highest authority.
+// AI re-extraction must never overwrite entries logged here.
+export type CorrectionLogEntry = {
+  id: string;
+  timestamp: string;
+  field: string;
+  action: "add" | "remove" | "update";
+  value: unknown;
+  userInstruction: string;
+  sourceType: "user_prompt";
+  sourceDetail: string;
+  language: string;
+};
+
 export type CandidateProfile = {
+  // Schema versioning — increment on breaking changes.
+  schemaVersion?: number;
+
   fullName: string | null;
   headline: string | null;
   summary: string | null;
@@ -67,6 +84,15 @@ export type CandidateProfile = {
   constraints: string[];
   verifiedClaims: VerifiedClaim[];
   openQuestions: string[];
+
+  // Language system (v2)
+  detectedInputLanguages?: string[];
+  interactionLanguage?: string;
+  preferredOutputLanguage?: string;
+  outputLanguageLockedByUser?: boolean;
+
+  // Permanent correction history (v2)
+  correctionLog?: CorrectionLogEntry[];
 };
 
 export type CandidateWorkspace = {
@@ -261,7 +287,14 @@ function normalizeCandidateProfile(value: unknown): CandidateProfile | null {
         .filter((item): item is VerifiedClaim => Boolean(item))
     : [];
 
+  // Pass through v2 optional fields without strict validation — they may not
+  // exist in profiles written by older schema versions.
+  const correctionLog = Array.isArray(profile.correctionLog)
+    ? (profile.correctionLog as CorrectionLogEntry[])
+    : undefined;
+
   return {
+    schemaVersion: typeof profile.schemaVersion === "number" ? profile.schemaVersion : 1,
     fullName: asString(profile.fullName),
     headline: asString(profile.headline),
     summary: asString(profile.summary),
@@ -278,6 +311,11 @@ function normalizeCandidateProfile(value: unknown): CandidateProfile | null {
     constraints: getArrayField(profile, "constraints"),
     verifiedClaims,
     openQuestions: getArrayField(profile, "openQuestions"),
+    detectedInputLanguages: asStringArray(profile.detectedInputLanguages),
+    interactionLanguage: asString(profile.interactionLanguage) ?? undefined,
+    preferredOutputLanguage: asString(profile.preferredOutputLanguage) ?? undefined,
+    outputLanguageLockedByUser: Boolean(profile.outputLanguageLockedByUser) || undefined,
+    ...(correctionLog !== undefined ? { correctionLog } : {}),
   };
 }
 

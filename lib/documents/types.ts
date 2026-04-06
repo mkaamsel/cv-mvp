@@ -1,6 +1,15 @@
+export type CvRoleItem = {
+  title: string;
+  company?: string;
+  location?: string;
+  dateRange?: string;
+  bullets: string[];
+};
+
 export type CvSection = {
   heading: string;
-  items: string[];
+  items?: string[];
+  roleItems?: CvRoleItem[];
 };
 
 export type CvDocumentInput = {

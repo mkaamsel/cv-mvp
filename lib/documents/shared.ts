@@ -3,6 +3,8 @@ import {
   BorderStyle,
   HeadingLevel,
   Paragraph,
+  TabStopPosition,
+  TabStopType,
   TextRun,
 } from "docx";
 
@@ -64,6 +66,53 @@ export function makeBullet(text: string) {
       after: 60,
     },
   });
+}
+
+/**
+ * Role header paragraph: "Role Title  [tab→]  Date Range"
+ * The second line (company + location) sits below, left-aligned.
+ */
+export function makeRoleHeaderParagraph(
+  title: string,
+  company?: string,
+  location?: string,
+  dateRange?: string,
+): Paragraph[] {
+  const paragraphs: Paragraph[] = [];
+
+  // Line 1: bold role title left, date range right-aligned via tab stop
+  const titleRun = new TextRun({ text: title, bold: true, size: 22 });
+  const runs: TextRun[] = [titleRun];
+  if (dateRange) {
+    runs.push(new TextRun({ text: "\t", size: 22 }));
+    runs.push(new TextRun({ text: dateRange, size: 20, color: "555555" }));
+  }
+
+  paragraphs.push(
+    new Paragraph({
+      children: runs,
+      spacing: { before: 160, after: 40 },
+      tabStops: [
+        {
+          type: TabStopType.RIGHT,
+          position: TabStopPosition.MAX,
+        },
+      ],
+    }),
+  );
+
+  // Line 2: company · location
+  const subLine = [company, location].filter(Boolean).join(" · ");
+  if (subLine) {
+    paragraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: subLine, size: 20, color: "555555" })],
+        spacing: { after: 60 },
+      }),
+    );
+  }
+
+  return paragraphs;
 }
 
 export function makeBodyParagraph(text: string) {

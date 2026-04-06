@@ -3,10 +3,14 @@ import { buildApplicationRecommendationInstructions } from "@/lib/prompts/applic
 import { buildCompanyContextInstructions } from "@/lib/prompts/companyContextPrompt";
 import { buildCompanyResearchInstructions } from "@/lib/prompts/companyResearchPrompt";
 import { buildGenerateCoverLetterInstructions } from "@/lib/prompts/generateCoverLetterPrompt";
+import { buildGenerateCvInstructions } from "@/lib/prompts/generateCvPrompt";
 import { buildMarketSignalsInstructions } from "@/lib/prompts/marketSignalsPrompt";
 import { buildPositioningBriefPrompt } from "@/lib/prompts/positioningBriefPrompt";
 import { buildRequiredProfileInstructions } from "@/lib/prompts/requiredProfilePrompt";
 import { buildReviewPrompt } from "@/lib/prompts/reviewPrompt";
+import { buildJdQualityInstructions } from "@/lib/prompts/jdQualityPrompt";
+import { buildSelectedEvidenceInstructions } from "@/lib/prompts/selectedEvidencePrompt";
+import { buildLanguageContext } from "@/lib/prompts/Intelligence/buildLanguageContext";
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -145,7 +149,7 @@ type WorkspaceJobProfile = {
     | "blocked-or-thin-content";
   normalizedUrl?: string;
   warnings?: string[];
-  outputLanguage?: "de" | "en";
+  outputLanguage?: "de" | "en" | "es";
   rawResponse?: unknown;
 };
 
@@ -192,6 +196,9 @@ type TailoringPipelineSuccess = {
   structuredJob: StructuredJob;
   insights: WorkspaceInsights;
   finalDrafts: WorkspaceFinalDrafts;
+  jdQualityAnalysis: JdQualityAnalysis | null;
+  jdQualityGate: JdQualityGate;
+  observationPoints: ObservationPoint[];
   telemetry: {
     runId: string;
     outcome: "completed" | "completed_with_limitations";
@@ -274,11 +281,59 @@ type AiMarketSignalsOutput = {
   summary?: string;
 };
 
+type AiSelectedEvidenceOutput = {
+  strongEvidence?: string[];
+  supportEvidence?: string[];
+  transferableEvidence?: string[];
+  weakEvidence?: string[];
+  combinedTopEvidence?: string[];
+};
+
 export type TailoringPipelineResult =
   | TailoringPipelineSuccess
   | TailoringPipelineError;
 
+// ── New types added 2026-04-04 ────────────────────────────────────────────────
+
+type JdDimensionScore = {
+  score: number;     // 0–1
+  signals: string[];
+  notes: string;
+};
+
+type JdQualityAnalysis = {
+  freshness: JdDimensionScore;
+  urgency: JdDimensionScore;
+  authenticity: JdDimensionScore;
+  completeness: JdDimensionScore;
+  overallTier: "green" | "amber" | "red";
+  inferredVsStated: boolean;
+  mentorMessage: string | null;
+};
+
+export type JdQualityGate = {
+  tier: "green" | "amber" | "red";
+  inferredVsStated: boolean;
+  mentorMessage: string | null;
+  // Always false out of the pipeline. The UI sets this after candidate confirmation.
+  proceedAnyway: boolean;
+};
+
+export type ObservationPoint = {
+  layerId: string;
+  timestamp: string;
+  inputSummary: string;
+  outputSummary: string;
+  track: "ai" | "rule_fallback";
+  confidence: number;   // 0–1
+  timeTaken: number;    // ms
+  warnings: string[];
+  humanReadableExplanation: string; // mandatory — must be readable by a non-technical person
+};
+
 const DEFAULT_ENGINE_SWITCHES = {
+  LAYER_0_JD_QUALITY: true,
+  LAYER_0_JD_QUALITY_AI: true,
   LAYER_1_ANALYSIS: true,
   LAYER_2_CANDIDATE_PROFILE_VIEW: true,
   LAYER_3_REQUIRED_PROFILE: true,
@@ -290,6 +345,7 @@ const DEFAULT_ENGINE_SWITCHES = {
   LAYER_6_MARKET_SIGNALS: true,
   LAYER_6_MARKET_SIGNALS_AI: true,
   LAYER_7_SELECTED_EVIDENCE: true,
+  LAYER_7_SELECTED_EVIDENCE_AI: true,
   LAYER_8_POSITIONING: true,
   LAYER_8_POSITIONING_AI: true,
   LAYER_9_RECOMMENDATION: true,
@@ -362,8 +418,10 @@ function asCertificationObjects(value: unknown): string[] {
     .filter((item): item is string => Boolean(item));
 }
 
-function normalizeLanguage(value: unknown): "en" | "de" {
-  return value === "de" ? "de" : "en";
+function normalizeLanguage(value: unknown): "en" | "de" | "es" {
+  if (value === "de") return "de";
+  if (value === "es") return "es";
+  return "en";
 }
 
 function tokenize(text: string): string[] {
@@ -446,7 +504,8 @@ async function callAiJson<T>(
 
     const content = response.choices[0]?.message?.content ?? "";
     return tryParseJson<T>(content);
-  } catch {
+  } catch (err) {
+    console.error("[callAiJson] AI call failed:", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -469,7 +528,8 @@ async function callAiText(
 
     const content = response.choices[0]?.message?.content?.trim() ?? "";
     return content || null;
-  } catch {
+  } catch (err) {
+    console.error("[callAiText] AI call failed:", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -806,7 +866,7 @@ function mapAiRequiredProfileToInternal(
 
 function deriveCompanyContext(
   structuredJob: StructuredJob,
-  language: "en" | "de",
+  language: "en" | "de" | "es",
 ): CompanyContext {
   const companyLabel =
     structuredJob.companyName || (language === "de" ? "Unbekannt" : "Unknown");
@@ -845,7 +905,7 @@ function deriveCompanyContext(
 function mapAiCompanyContextToInternal(
   ai: AiCompanyContextOutput | null,
   structuredJob: StructuredJob,
-  language: "en" | "de",
+  language: "en" | "de" | "es",
   fallback: CompanyContext,
 ): CompanyContext {
   if (!ai) return fallback;
@@ -1272,6 +1332,34 @@ function mapAiPositioningToInternal(
   };
 }
 
+function mapAiSelectedEvidenceToInternal(
+  ai: AiSelectedEvidenceOutput | null,
+  fallback: SelectedEvidencePack,
+): SelectedEvidencePack {
+  if (!ai) return fallback;
+
+  const strong = asStringArray(ai.strongEvidence).slice(0, 6);
+  const support = asStringArray(ai.supportEvidence).slice(0, 6);
+  const transferable = asStringArray(ai.transferableEvidence).slice(0, 4);
+  const weak = asStringArray(ai.weakEvidence).slice(0, 4);
+  const combined = asStringArray(ai.combinedTopEvidence).slice(0, 8);
+
+  // If AI returned nothing useful, fall back to rule track
+  if (strong.length === 0 && support.length === 0 && combined.length === 0) {
+    return fallback;
+  }
+
+  return {
+    strongEvidence: strong,
+    supportEvidence: support,
+    transferableEvidence: transferable,
+    weakEvidence: weak,
+    combinedTopEvidence: combined.length > 0
+      ? combined
+      : [...strong.slice(0, 5), ...support.slice(0, 3)].slice(0, 8),
+  };
+}
+
 function buildRecommendationPack(
   selectedEvidence: SelectedEvidencePack,
   missingSignals: string[],
@@ -1379,7 +1467,7 @@ function buildPositioningBriefText(
   job: StructuredJob,
   positioningBrief: PositioningBriefPack,
   missingSignals: string[],
-  language: "en" | "de",
+  language: "en" | "de" | "es",
 ): string {
   const headline =
     asString(candidateProfile?.headline) ??
@@ -1401,8 +1489,8 @@ function buildPositioningBriefText(
       missingSignals.length
         ? `Offene Signale: ${missingSignals.slice(0, 2).join("; ")}.`
         : "Die Kernanforderungen wirken derzeit weitgehend abgedeckt.",
-      "Die Positionierung sollte glaubwürdig, selektiv und ohne Überdehnung erfolgen.",
-    ].join(" ");
+      "Positionierungshinweis: Glaubwürdig, selektiv und ohne Überdehnung positionieren.",
+    ].join("\n");
   }
 
   return [
@@ -1414,13 +1502,13 @@ function buildPositioningBriefText(
     missingSignals.length
       ? `Open signals: ${missingSignals.slice(0, 2).join("; ")}.`
       : "The core requirements currently appear broadly covered.",
-    "The positioning should stay credible, selective, and non-exaggerative.",
-  ].join(" ");
+    "Positioning note: Stay credible, selective, and non-exaggerative.",
+  ].join("\n");
 }
 
 function buildCompanyContextText(
   companyContext: CompanyContext,
-  language: "en" | "de",
+  language: "en" | "de" | "es",
 ): string {
   if (language === "de") {
     return [
@@ -1476,7 +1564,7 @@ function buildCvDraft(
 function buildCoverLetterDraft(
   candidateProfile: Record<string, unknown> | null,
   bundle: BundleAssembly,
-  language: "en" | "de",
+  language: "en" | "de" | "es",
 ): string {
   const name = asString(candidateProfile?.fullName) ?? "Candidate";
   const summary =
@@ -1533,14 +1621,68 @@ async function safeFetchJson<T>(
   url: string,
   init: RequestInit,
 ): Promise<{ ok: boolean; status: number; data: T | Record<string, unknown> }> {
-  const response = await fetch(url, init);
-  const data = (await response.json()) as T | Record<string, unknown>;
+  try {
+    const response = await fetch(url, init);
+    let data: T | Record<string, unknown> = {};
+    try {
+      data = (await response.json()) as T | Record<string, unknown>;
+    } catch (jsonErr) {
+      console.error("[safeFetchJson] failed to parse JSON response from", url, jsonErr);
+    }
+    return { ok: response.ok, status: response.status, data };
+  } catch (fetchErr) {
+    console.error("[safeFetchJson] network error fetching", url, fetchErr);
+    return { ok: false, status: 0, data: { error: String(fetchErr) } };
+  }
+}
 
-  return {
-    ok: response.ok,
-    status: response.status,
-    data,
-  };
+/**
+ * Attempt to fetch a short text snippet from the company's homepage.
+ * Used only for writing-style analysis — never as factual evidence.
+ * Returns null on any failure (blocked, timeout, non-HTML, etc.).
+ * Times out after 5 seconds to avoid slowing the main pipeline.
+ */
+async function fetchCompanyPageSnippet(jobUrl: string): Promise<string | null> {
+  try {
+    const parsed = new URL(jobUrl);
+    const homepageUrl = `${parsed.protocol}//${parsed.hostname}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    let html = "";
+    try {
+      const res = await fetch(homepageUrl, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (compatible; ApplicantBot/1.0) AppleWebKit/537.36",
+          Accept: "text/html",
+        },
+        redirect: "follow",
+      });
+      if (!res.ok) return null;
+      html = await res.text();
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    // Strip scripts, styles, then all tags — extract first meaningful text
+    const clean = html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    // Take the first 500 meaningful characters of body text
+    const snippet = clean.slice(0, 500).trim();
+    return snippet.length >= 40 ? snippet : null;
+  } catch {
+    return null;
+  }
 }
 
 function createRunId(): string {
@@ -1587,6 +1729,29 @@ function normalizeReviewReport(input: unknown): ReviewReport | null {
   };
 }
 
+function makeObservation(
+  layerId: string,
+  inputSummary: string,
+  outputSummary: string,
+  track: "ai" | "rule_fallback",
+  confidence: number,
+  startMs: number,
+  warnings: string[],
+  humanReadableExplanation: string,
+): ObservationPoint {
+  return {
+    layerId,
+    timestamp: new Date().toISOString(),
+    inputSummary,
+    outputSummary,
+    track,
+    confidence,
+    timeTaken: Date.now() - startMs,
+    warnings,
+    humanReadableExplanation,
+  };
+}
+
 export async function runTailoringPipeline({
   origin,
   cookieHeader = "",
@@ -1601,11 +1766,85 @@ export async function runTailoringPipeline({
     ...DEFAULT_ENGINE_SWITCHES,
     ...(debugConfig ?? {}),
   };
-const pipelineTrace: string[] = [];
-const normalizedJobUrl = asString(jobUrl) ?? "";
-const normalizedJobDescriptionText = asString(jobDescriptionText) ?? "";
-const normalizedOutputLanguage = normalizeLanguage(outputLanguage);
-const normalizedCandidateProfile = asRecord(candidateProfile);
+  const pipelineTrace: string[] = [];
+  const observationPoints: ObservationPoint[] = [];
+  const pipelineWarnings: string[] = [];
+  const normalizedJobUrl = asString(jobUrl) ?? "";
+  const normalizedJobDescriptionText = asString(jobDescriptionText) ?? "";
+  const normalizedOutputLanguage = normalizeLanguage(outputLanguage);
+  const normalizedCandidateProfile = asRecord(candidateProfile);
+
+  console.log("[runTailoringPipeline] started", {
+    origin,
+    hasJobUrl: Boolean(normalizedJobUrl),
+    jobDescriptionTextLength: normalizedJobDescriptionText.length,
+    outputLanguage: normalizedOutputLanguage,
+    hasCandidateProfile: Boolean(normalizedCandidateProfile),
+    candidateProfileKeys: normalizedCandidateProfile ? Object.keys(normalizedCandidateProfile) : [],
+  });
+
+  // ── Layer 0 — JD Quality Analysis ──────────────────────────────────────────
+  let jdQualityAnalysis: JdQualityAnalysis | null = null;
+
+  if (ENGINE_SWITCHES.LAYER_0_JD_QUALITY) {
+    try {
+      const tLayer0 = Date.now();
+      pipelineTrace.push("Layer0A: jd-quality:start");
+
+      if (ENGINE_SWITCHES.LAYER_0_JD_QUALITY_AI && normalizedJobDescriptionText) {
+        pipelineTrace.push("Layer0B: jd-quality:ai:start");
+
+        jdQualityAnalysis = await callAiJson<JdQualityAnalysis>(
+          buildJdQualityInstructions(normalizedOutputLanguage),
+          JSON.stringify({ rawJobText: normalizedJobDescriptionText }, null, 2),
+        );
+
+        pipelineTrace.push(
+          jdQualityAnalysis
+            ? "Layer0B: jd-quality:ai:done"
+            : "Layer0B: jd-quality:ai:fallback",
+        );
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer0_JdQuality",
+        `Raw JD text length: ${normalizedJobDescriptionText.length} chars`,
+        jdQualityAnalysis
+          ? `Tier: ${jdQualityAnalysis.overallTier}, inferredVsStated: ${jdQualityAnalysis.inferredVsStated}`
+          : "AI unavailable — quality analysis skipped",
+        jdQualityAnalysis ? "ai" : "rule_fallback",
+        jdQualityAnalysis ? 0.8 : 0.0,
+        tLayer0,
+        [],
+        jdQualityAnalysis
+          ? `The job description was assessed as ${
+              jdQualityAnalysis.overallTier === "green"
+                ? "complete and credible — ready to process"
+                : jdQualityAnalysis.overallTier === "amber"
+                ? "usable but with some gaps or inferred details — the system will flag what was inferred"
+                : "potentially unreliable — the candidate has been given an honest heads-up before we proceed"
+            }.`
+          : "Job description quality could not be assessed — the AI analysis was unavailable.",
+      ));
+
+      pipelineTrace.push("Layer0A: jd-quality:done");
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer0 failed — continuing:", err);
+      pipelineWarnings.push("We couldn't assess the quality of this job posting. Your application is ready regardless.");
+      pipelineTrace.push("Layer0A: jd-quality:error:caught");
+    }
+  }
+
+  // Derive quality gate (never blocks — always emits, UI decides how to surface it)
+  const jdQualityGate: JdQualityGate = {
+    tier: jdQualityAnalysis?.overallTier ?? "green",
+    inferredVsStated: jdQualityAnalysis?.inferredVsStated ?? false,
+    mentorMessage: jdQualityAnalysis?.mentorMessage ?? null,
+    proceedAnyway: false,
+  };
+
+  // ── Layer 1 — Job Extraction ────────────────────────────────────────────────
+  const tLayer1 = Date.now();
   pipelineTrace.push("Layer1A: extract-job:start");
 
   const extractJobResponse = await safeFetchJson<{
@@ -1629,22 +1868,45 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
     cache: "no-store",
   });
 
-  if (!extractJobResponse.ok) {
-    const errorData = asRecord(extractJobResponse.data);
+  const extractData = asRecord(extractJobResponse.data) ?? {};
 
-    return {
-      ok: false,
-      status: extractJobResponse.status || 500,
-      message:
-        asString(errorData?.error) ??
-        "Job extraction failed inside the canonical pipeline.",
-      details: extractJobResponse.data,
-    };
+  if (!extractJobResponse.ok) {
+    const errorMsg = asString(extractData.error) ?? "Job extraction failed inside the canonical pipeline.";
+    console.error("[runTailoringPipeline] Layer1: extract-job returned", extractJobResponse.status, errorMsg);
+
+    // If we have a partial structuredJob and extracted text (e.g. 422 "not usable but has data"),
+    // continue the pipeline with warnings rather than failing hard.
+    // Only hard-fail when there is truly nothing to work with (no extracted text at all).
+    const partialExtractedText = asString(extractData.extractedText) ?? "";
+    const hasPartialStructuredJob = Boolean(asRecord(extractData.structuredJob));
+
+    if (!partialExtractedText && !hasPartialStructuredJob) {
+      return {
+        ok: false,
+        status: extractJobResponse.status || 500,
+        message: errorMsg,
+        details: extractJobResponse.data,
+      };
+    }
+
+    // Partial data available — continue with warning
+    console.warn("[runTailoringPipeline] Layer1: continuing with partial extraction data (warnings added)");
+    pipelineTrace.push(`Layer1A: extract-job:partial (status=${extractJobResponse.status})`);
+    // fall through to use whatever data was returned
   }
 
-  const extractData = asRecord(extractJobResponse.data) ?? {};
   const structuredJob = normalizeStructuredJob(extractData.structuredJob);
   pipelineTrace.push("Layer1A: extract-job:done");
+  observationPoints.push(makeObservation(
+    "Layer1_ExtractJob",
+    `JD input: ${normalizedJobDescriptionText ? "pasted text" : "URL"} (${(normalizedJobDescriptionText || normalizedJobUrl).length} chars)`,
+    `Extracted: company="${structuredJob.companyName}", title="${structuredJob.jobTitle}", responsibilities=${structuredJob.responsibilities.length}, requirements=${structuredJob.requirements.length}`,
+    "ai",
+    0.85,
+    tLayer1,
+    asStringArray(extractData.warnings),
+    "The job description was parsed into structured fields — company name, job title, responsibilities, and requirements.",
+  ));
 
   const extractedText = asString(extractData.extractedText) ?? "";
 
@@ -1665,15 +1927,42 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
     rawResponse: extractJobResponse.data,
   };
 
+  console.log("[runTailoringPipeline] Layer1 done:", {
+    companyName: structuredJob.companyName,
+    jobTitle: structuredJob.jobTitle,
+    responsibilities: structuredJob.responsibilities.length,
+    requirements: structuredJob.requirements.length,
+    extractedTextLength: extractedText.length,
+    source: jobProfile.extractionSource,
+    warnings: jobProfile.warnings,
+  });
+
   let candidateProfileView: CandidateProfileView = {
     experienceSignals: [],
     possessionSignals: [],
   };
 
   if (ENGINE_SWITCHES.LAYER_2_CANDIDATE_PROFILE_VIEW) {
-    pipelineTrace.push("Layer2A: candidate-profile-view:start");
-    candidateProfileView = buildCandidateProfileView(normalizedCandidateProfile);
-    pipelineTrace.push("Layer2A: candidate-profile-view:done");
+    try {
+      const tLayer2 = Date.now();
+      pipelineTrace.push("Layer2A: candidate-profile-view:start");
+      candidateProfileView = buildCandidateProfileView(normalizedCandidateProfile);
+      pipelineTrace.push("Layer2A: candidate-profile-view:done");
+      observationPoints.push(makeObservation(
+        "Layer2_CandidateProfileView",
+        `Profile fields: ${normalizedCandidateProfile ? Object.keys(normalizedCandidateProfile).length : 0}`,
+        `Experience signals: ${candidateProfileView.experienceSignals.length}, possession signals: ${candidateProfileView.possessionSignals.length}`,
+        "rule_fallback",
+        0.6,
+        tLayer2,
+        [],
+        "Your profile was read and summarised into the experience and skills signals most relevant for matching against this role.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer2 failed — continuing:", err);
+      pipelineWarnings.push("We had difficulty reading parts of your profile. Some matching may be limited.");
+      pipelineTrace.push("Layer2A: candidate-profile-view:error:caught");
+    }
   }
 
   let requiredProfile: RequiredProfile = {
@@ -1685,37 +1974,55 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   };
 
   if (ENGINE_SWITCHES.LAYER_3_REQUIRED_PROFILE) {
-    pipelineTrace.push("Layer3A: required-profile:rule:start");
-    requiredProfile = deriveRequiredProfile(structuredJob);
-    pipelineTrace.push("Layer3A: required-profile:rule:done");
+    try {
+      const tLayer3 = Date.now();
+      pipelineTrace.push("Layer3A: required-profile:rule:start");
+      requiredProfile = deriveRequiredProfile(structuredJob);
+      pipelineTrace.push("Layer3A: required-profile:rule:done");
 
-    if (ENGINE_SWITCHES.LAYER_3_REQUIRED_PROFILE_AI) {
-      pipelineTrace.push("Layer3B: required-profile:ai:start");
+      if (ENGINE_SWITCHES.LAYER_3_REQUIRED_PROFILE_AI) {
+        pipelineTrace.push("Layer3B: required-profile:ai:start");
 
-      const aiRequiredProfile = await callAiJson<AiRequiredProfileOutput>(
-        buildRequiredProfileInstructions(normalizedOutputLanguage),
-        JSON.stringify(
-          {
-            structuredJob,
-            extractedJobText: extractedText,
-            companyContextSummary: "",
-            marketSignalsSummary: "",
-          },
-          null,
-          2,
-        ),
-      );
+        const aiRequiredProfile = await callAiJson<AiRequiredProfileOutput>(
+          buildRequiredProfileInstructions(normalizedOutputLanguage),
+          JSON.stringify(
+            {
+              structuredJob,
+              extractedJobText: extractedText,
+              companyContextSummary: "",
+              marketSignalsSummary: "",
+            },
+            null,
+            2,
+          ),
+        );
 
-      requiredProfile = mapAiRequiredProfileToInternal(
-        aiRequiredProfile,
-        requiredProfile,
-      );
+        requiredProfile = mapAiRequiredProfileToInternal(
+          aiRequiredProfile,
+          requiredProfile,
+        );
 
-      pipelineTrace.push(
-        aiRequiredProfile
-          ? "Layer3B: required-profile:ai:done"
-          : "Layer3B: required-profile:ai:fallback",
-      );
+        pipelineTrace.push(
+          aiRequiredProfile
+            ? "Layer3B: required-profile:ai:done"
+            : "Layer3B: required-profile:ai:fallback",
+        );
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer3_RequiredProfile",
+        `JD requirements: ${structuredJob.requirements.length} items`,
+        `Responsibility signals: ${requiredProfile.responsibilitySignals.length}, requirement signals: ${requiredProfile.requirementSignals.length}, technical: ${requiredProfile.technicalSignals.length}`,
+        ENGINE_SWITCHES.LAYER_3_REQUIRED_PROFILE_AI ? "ai" : "rule_fallback",
+        ENGINE_SWITCHES.LAYER_3_REQUIRED_PROFILE_AI ? 0.85 : 0.6,
+        tLayer3,
+        [],
+        "The role's required competencies were identified — the skills, qualifications, and behaviours that matter most for this position.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer3 failed — continuing:", err);
+      pipelineWarnings.push("Part of the role analysis didn't complete. Your application has been prepared with the available requirements.");
+      pipelineTrace.push("Layer3A: required-profile:error:caught");
     }
   }
 
@@ -1727,40 +2034,58 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   };
 
   if (ENGINE_SWITCHES.LAYER_4_COMPANY_CONTEXT) {
-    pipelineTrace.push("Layer4A: company-context:rule:start");
-    companyContext = deriveCompanyContext(
-      structuredJob,
-      normalizedOutputLanguage,
-    );
-    pipelineTrace.push("Layer4A: company-context:rule:done");
-
-    if (ENGINE_SWITCHES.LAYER_4_COMPANY_CONTEXT_AI) {
-      pipelineTrace.push("Layer4B: company-context:ai:start");
-
-      const aiCompanyContext = await callAiJson<AiCompanyContextOutput>(
-        buildCompanyContextInstructions(normalizedOutputLanguage),
-        JSON.stringify(
-          {
-            structuredJob,
-            extractedJobText: extractedText,
-          },
-          null,
-          2,
-        ),
-      );
-
-      companyContext = mapAiCompanyContextToInternal(
-        aiCompanyContext,
+    try {
+      const tLayer4 = Date.now();
+      pipelineTrace.push("Layer4A: company-context:rule:start");
+      companyContext = deriveCompanyContext(
         structuredJob,
         normalizedOutputLanguage,
-        companyContext,
       );
+      pipelineTrace.push("Layer4A: company-context:rule:done");
 
-      pipelineTrace.push(
-        aiCompanyContext
-          ? "Layer4B: company-context:ai:done"
-          : "Layer4B: company-context:ai:fallback",
-      );
+      if (ENGINE_SWITCHES.LAYER_4_COMPANY_CONTEXT_AI) {
+        pipelineTrace.push("Layer4B: company-context:ai:start");
+
+        const aiCompanyContext = await callAiJson<AiCompanyContextOutput>(
+          buildCompanyContextInstructions(normalizedOutputLanguage),
+          JSON.stringify(
+            {
+              structuredJob,
+              extractedJobText: extractedText,
+            },
+            null,
+            2,
+          ),
+        );
+
+        companyContext = mapAiCompanyContextToInternal(
+          aiCompanyContext,
+          structuredJob,
+          normalizedOutputLanguage,
+          companyContext,
+        );
+
+        pipelineTrace.push(
+          aiCompanyContext
+            ? "Layer4B: company-context:ai:done"
+            : "Layer4B: company-context:ai:fallback",
+        );
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer4_CompanyContext",
+        `Company: "${structuredJob.companyName || "unknown"}", location: "${structuredJob.location || "unknown"}"`,
+        `Company label: "${companyContext.companyLabel}", role label: "${companyContext.roleLabel}"`,
+        ENGINE_SWITCHES.LAYER_4_COMPANY_CONTEXT_AI ? "ai" : "rule_fallback",
+        ENGINE_SWITCHES.LAYER_4_COMPANY_CONTEXT_AI ? 0.85 : 0.6,
+        tLayer4,
+        [],
+        "The company's environment was interpreted — its industry, culture signals, and the kind of role this appears to be.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer4 failed — continuing:", err);
+      pipelineWarnings.push("Company context analysis encountered a problem. Your application continues with the information extracted from the job description.");
+      pipelineTrace.push("Layer4A: company-context:error:caught");
     }
   }
 
@@ -1772,36 +2097,54 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   };
 
   if (ENGINE_SWITCHES.LAYER_5_COMPANY_RESEARCH) {
-    pipelineTrace.push("Layer5A: company-research:rule:start");
-    companyResearch = deriveCompanyResearch(structuredJob, companyContext);
-    pipelineTrace.push("Layer5A: company-research:rule:done");
+    try {
+      const tLayer5 = Date.now();
+      pipelineTrace.push("Layer5A: company-research:rule:start");
+      companyResearch = deriveCompanyResearch(structuredJob, companyContext);
+      pipelineTrace.push("Layer5A: company-research:rule:done");
 
-    if (ENGINE_SWITCHES.LAYER_5_COMPANY_RESEARCH_AI) {
-      pipelineTrace.push("Layer5B: company-research:ai:start");
+      if (ENGINE_SWITCHES.LAYER_5_COMPANY_RESEARCH_AI) {
+        pipelineTrace.push("Layer5B: company-research:ai:start");
 
-      const aiCompanyResearch = await callAiJson<AiCompanyResearchOutput>(
-        buildCompanyResearchInstructions(normalizedOutputLanguage),
-        JSON.stringify(
-          {
-            companyName: structuredJob.companyName,
-            jobTitle: structuredJob.jobTitle,
-            rawSearchNotes: [companyContext.environmentSummary, structuredJob.summary],
-          },
-          null,
-          2,
-        ),
-      );
+        const aiCompanyResearch = await callAiJson<AiCompanyResearchOutput>(
+          buildCompanyResearchInstructions(normalizedOutputLanguage),
+          JSON.stringify(
+            {
+              companyName: structuredJob.companyName,
+              jobTitle: structuredJob.jobTitle,
+              rawSearchNotes: [companyContext.environmentSummary, structuredJob.summary],
+            },
+            null,
+            2,
+          ),
+        );
 
-      companyResearch = mapAiCompanyResearchToInternal(
-        aiCompanyResearch,
-        companyResearch,
-      );
+        companyResearch = mapAiCompanyResearchToInternal(
+          aiCompanyResearch,
+          companyResearch,
+        );
 
-      pipelineTrace.push(
-        aiCompanyResearch
-          ? "Layer5B: company-research:ai:done"
-          : "Layer5B: company-research:ai:fallback",
-      );
+        pipelineTrace.push(
+          aiCompanyResearch
+            ? "Layer5B: company-research:ai:done"
+            : "Layer5B: company-research:ai:fallback",
+        );
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer5_CompanyResearch",
+        `Company: "${structuredJob.companyName || "unknown"}"`,
+        `Employer type: "${companyResearch.employerType}", complexity: "${companyResearch.complexitySignal}", scope: "${companyResearch.scopeSignal}"`,
+        ENGINE_SWITCHES.LAYER_5_COMPANY_RESEARCH_AI ? "ai" : "rule_fallback",
+        ENGINE_SWITCHES.LAYER_5_COMPANY_RESEARCH_AI ? 0.85 : 0.6,
+        tLayer5,
+        [],
+        "The company was researched to understand its employer type, size signals, and the scope of the organisation.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer5 failed — continuing:", err);
+      pipelineWarnings.push("Company background research could not be completed. Your application has been prepared without this additional context.");
+      pipelineTrace.push("Layer5A: company-research:error:caught");
     }
   }
 
@@ -1813,36 +2156,54 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   };
 
   if (ENGINE_SWITCHES.LAYER_6_MARKET_SIGNALS) {
-    pipelineTrace.push("Layer6A: market-signals:rule:start");
-    marketSignals = deriveMarketSignals(structuredJob, requiredProfile);
-    pipelineTrace.push("Layer6A: market-signals:rule:done");
+    try {
+      const tLayer6 = Date.now();
+      pipelineTrace.push("Layer6A: market-signals:rule:start");
+      marketSignals = deriveMarketSignals(structuredJob, requiredProfile);
+      pipelineTrace.push("Layer6A: market-signals:rule:done");
 
-    if (ENGINE_SWITCHES.LAYER_6_MARKET_SIGNALS_AI) {
-      pipelineTrace.push("Layer6B: market-signals:ai:start");
+      if (ENGINE_SWITCHES.LAYER_6_MARKET_SIGNALS_AI) {
+        pipelineTrace.push("Layer6B: market-signals:ai:start");
 
-      const aiMarketSignals = await callAiJson<AiMarketSignalsOutput>(
-        buildMarketSignalsInstructions(normalizedOutputLanguage),
-        JSON.stringify(
-          {
-            structuredJob,
-            extractedJobText: extractedText,
-            companyContextSummary: companyContext.environmentSummary,
-          },
-          null,
-          2,
-        ),
-      );
+        const aiMarketSignals = await callAiJson<AiMarketSignalsOutput>(
+          buildMarketSignalsInstructions(normalizedOutputLanguage),
+          JSON.stringify(
+            {
+              structuredJob,
+              extractedJobText: extractedText,
+              companyContextSummary: companyContext.environmentSummary,
+            },
+            null,
+            2,
+          ),
+        );
 
-      marketSignals = mapAiMarketSignalsToInternal(
-        aiMarketSignals,
-        marketSignals,
-      );
+        marketSignals = mapAiMarketSignalsToInternal(
+          aiMarketSignals,
+          marketSignals,
+        );
 
-      pipelineTrace.push(
-        aiMarketSignals
-          ? "Layer6B: market-signals:ai:done"
-          : "Layer6B: market-signals:ai:fallback",
-      );
+        pipelineTrace.push(
+          aiMarketSignals
+            ? "Layer6B: market-signals:ai:done"
+            : "Layer6B: market-signals:ai:fallback",
+        );
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer6_MarketSignals",
+        `JD seniority/requirements: ${structuredJob.requirements.length} requirement signals`,
+        `Seniority: "${marketSignals.senioritySignal}", strictness: "${marketSignals.strictnessSignal}", transferability: "${marketSignals.transferabilitySignal}"`,
+        ENGINE_SWITCHES.LAYER_6_MARKET_SIGNALS_AI ? "ai" : "rule_fallback",
+        ENGINE_SWITCHES.LAYER_6_MARKET_SIGNALS_AI ? 0.85 : 0.6,
+        tLayer6,
+        [],
+        "The hiring signals were read — the seniority level expected, how strict the requirements are, and how much transferable experience would be accepted.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer6 failed — continuing:", err);
+      pipelineWarnings.push("Hiring signal analysis encountered a problem. Your application continues with core matching.");
+      pipelineTrace.push("Layer6A: market-signals:error:caught");
     }
   }
 
@@ -1855,18 +2216,70 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   };
 
   if (ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE) {
-    pipelineTrace.push("Layer7A: selected-evidence:start");
-    selectedEvidence = buildSelectedEvidencePack(
+    try {
+      const tLayer7 = Date.now();
+      pipelineTrace.push("Layer7A: selected-evidence:rule:start");
+      selectedEvidence = buildSelectedEvidencePack(
+        candidateProfileView,
+        requiredProfile,
+      );
+      pipelineTrace.push("Layer7A: selected-evidence:rule:done");
+
+      if (ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE_AI) {
+        pipelineTrace.push("Layer7B: selected-evidence:ai:start");
+
+        const aiSelectedEvidence = await callAiJson<AiSelectedEvidenceOutput>(
+          buildSelectedEvidenceInstructions(normalizedOutputLanguage),
+          JSON.stringify(
+            {
+              candidateProfile: normalizedCandidateProfile,
+              structuredJob,
+              requiredProfile,
+              candidateProfileView,
+            },
+            null,
+            2,
+          ),
+        );
+
+        selectedEvidence = mapAiSelectedEvidenceToInternal(
+          aiSelectedEvidence,
+          selectedEvidence,
+        );
+
+        pipelineTrace.push(
+          aiSelectedEvidence
+            ? "Layer7B: selected-evidence:ai:done"
+            : "Layer7B: selected-evidence:ai:fallback",
+        );
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer7_SelectedEvidence",
+        `Experience signals: ${candidateProfileView.experienceSignals.length}, requirement signals: ${requiredProfile.requirementSignals.length}`,
+        `Strong: ${selectedEvidence.strongEvidence.length}, support: ${selectedEvidence.supportEvidence.length}, transferable: ${selectedEvidence.transferableEvidence.length}, top combined: ${selectedEvidence.combinedTopEvidence.length}`,
+        ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE_AI ? "ai" : "rule_fallback",
+        ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE_AI ? 0.85 : 0.6,
+        tLayer7,
+        [],
+        "Your strongest evidence was selected and ranked against the role's core requirements.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer7 failed — continuing:", err);
+      pipelineWarnings.push("Evidence selection ran into a problem. Your application continues with the available evidence.");
+      pipelineTrace.push("Layer7A: selected-evidence:error:caught");
+    }
+  }
+
+  let missingSignals: string[] = [];
+  try {
+    missingSignals = buildMissingSignals(
       candidateProfileView,
       requiredProfile,
     );
-    pipelineTrace.push("Layer7A: selected-evidence:done");
+  } catch (err) {
+    console.error("[runTailoringPipeline] missingSignals failed — continuing:", err);
   }
-
-  const missingSignals = buildMissingSignals(
-    candidateProfileView,
-    requiredProfile,
-  );
 
   let positioningBrief: PositioningBriefPack = {
     positioningStrength: "measured",
@@ -1879,46 +2292,64 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   };
 
   if (ENGINE_SWITCHES.LAYER_8_POSITIONING) {
-    pipelineTrace.push("Layer8A: positioning:rule:start");
-    positioningBrief = buildPositioningBriefPack(
-      normalizedCandidateProfile,
-      structuredJob,
-      selectedEvidence,
-      missingSignals,
-    );
-    pipelineTrace.push("Layer8A: positioning:rule:done");
-
-    if (ENGINE_SWITCHES.LAYER_8_POSITIONING_AI) {
-      pipelineTrace.push("Layer8B: positioning:ai:start");
-
-      const aiPositioning = await callAiJson<Record<string, unknown>>(
-        buildPositioningBriefPrompt({
-          locale: normalizedOutputLanguage,
-          candidateProfileJson: toJsonString(normalizedCandidateProfile),
-          structuredJobJson: toJsonString(structuredJob),
-          requiredProfileJson: toJsonString(requiredProfile),
-          companyContextJson: toJsonString(companyContext),
-          selectedEvidenceJson: toJsonString(selectedEvidence),
-        }),
-        JSON.stringify(
-          {
-            instruction: "Return valid JSON only.",
-          },
-          null,
-          2,
-        ),
+    try {
+      const tLayer8 = Date.now();
+      pipelineTrace.push("Layer8A: positioning:rule:start");
+      positioningBrief = buildPositioningBriefPack(
+        normalizedCandidateProfile,
+        structuredJob,
+        selectedEvidence,
+        missingSignals,
       );
+      pipelineTrace.push("Layer8A: positioning:rule:done");
 
-      positioningBrief = mapAiPositioningToInternal(
-        aiPositioning,
-        positioningBrief,
-      );
+      if (ENGINE_SWITCHES.LAYER_8_POSITIONING_AI) {
+        pipelineTrace.push("Layer8B: positioning:ai:start");
 
-      pipelineTrace.push(
-        aiPositioning
-          ? "Layer8B: positioning:ai:done"
-          : "Layer8B: positioning:ai:fallback",
-      );
+        const aiPositioning = await callAiJson<Record<string, unknown>>(
+          buildPositioningBriefPrompt({
+            locale: normalizedOutputLanguage,
+            candidateProfileJson: toJsonString(normalizedCandidateProfile),
+            structuredJobJson: toJsonString(structuredJob),
+            requiredProfileJson: toJsonString(requiredProfile),
+            companyContextJson: toJsonString(companyContext),
+            selectedEvidenceJson: toJsonString(selectedEvidence),
+          }),
+          JSON.stringify(
+            {
+              instruction: "Return valid JSON only.",
+            },
+            null,
+            2,
+          ),
+        );
+
+        positioningBrief = mapAiPositioningToInternal(
+          aiPositioning,
+          positioningBrief,
+        );
+
+        pipelineTrace.push(
+          aiPositioning
+            ? "Layer8B: positioning:ai:done"
+            : "Layer8B: positioning:ai:fallback",
+        );
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer8_Positioning",
+        `Evidence items: ${selectedEvidence.combinedTopEvidence.length}, missing signals: ${missingSignals.length}`,
+        `Strength: "${positioningBrief.positioningStrength}", tone: "${positioningBrief.positioningTone}", coreWhyFit: ${positioningBrief.coreWhyFit.length} items`,
+        ENGINE_SWITCHES.LAYER_8_POSITIONING_AI ? "ai" : "rule_fallback",
+        ENGINE_SWITCHES.LAYER_8_POSITIONING_AI ? 0.85 : 0.6,
+        tLayer8,
+        [],
+        "Your positioning strategy was built — how to frame your background and strengths specifically for this role.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer8 failed — continuing:", err);
+      pipelineWarnings.push("Positioning analysis encountered a problem. Your application has been prepared with the available guidance.");
+      pipelineTrace.push("Layer8A: positioning:error:caught");
     }
   }
 
@@ -1934,45 +2365,63 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   };
 
   if (ENGINE_SWITCHES.LAYER_9_RECOMMENDATION) {
-    pipelineTrace.push("Layer9A: recommendation:rule:start");
-    recommendation = buildRecommendationPack(
-      selectedEvidence,
-      missingSignals,
-      marketSignals,
-    );
-    pipelineTrace.push("Layer9A: recommendation:rule:done");
-
-    if (ENGINE_SWITCHES.LAYER_9_RECOMMENDATION_AI) {
-      pipelineTrace.push("Layer9B: recommendation:ai:start");
-
-      const aiRecommendation = await callAiJson<Record<string, unknown>>(
-        buildApplicationRecommendationInstructions(normalizedOutputLanguage),
-        JSON.stringify(
-          {
-            candidateProfile: normalizedCandidateProfile,
-            structuredJob,
-            requiredProfile,
-            companyContext,
-            companyResearch,
-            marketSignals,
-            selectedEvidence,
-            missingSignals,
-          },
-          null,
-          2,
-        ),
+    try {
+      const tLayer9 = Date.now();
+      pipelineTrace.push("Layer9A: recommendation:rule:start");
+      recommendation = buildRecommendationPack(
+        selectedEvidence,
+        missingSignals,
+        marketSignals,
       );
+      pipelineTrace.push("Layer9A: recommendation:rule:done");
 
-      recommendation = mapAiRecommendationToInternal(
-        aiRecommendation,
-        recommendation,
-      );
+      if (ENGINE_SWITCHES.LAYER_9_RECOMMENDATION_AI) {
+        pipelineTrace.push("Layer9B: recommendation:ai:start");
 
-      pipelineTrace.push(
-        aiRecommendation
-          ? "Layer9B: recommendation:ai:done"
-          : "Layer9B: recommendation:ai:fallback",
-      );
+        const aiRecommendation = await callAiJson<Record<string, unknown>>(
+          buildApplicationRecommendationInstructions(normalizedOutputLanguage),
+          JSON.stringify(
+            {
+              candidateProfile: normalizedCandidateProfile,
+              structuredJob,
+              requiredProfile,
+              companyContext,
+              companyResearch,
+              marketSignals,
+              selectedEvidence,
+              missingSignals,
+            },
+            null,
+            2,
+          ),
+        );
+
+        recommendation = mapAiRecommendationToInternal(
+          aiRecommendation,
+          recommendation,
+        );
+
+        pipelineTrace.push(
+          aiRecommendation
+            ? "Layer9B: recommendation:ai:done"
+            : "Layer9B: recommendation:ai:fallback",
+        );
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer9_Recommendation",
+        `Evidence: ${selectedEvidence.combinedTopEvidence.length} items, missing: ${missingSignals.length}`,
+        `Recommendation: "${recommendation.applicationRecommendation}", strong matches: ${recommendation.strongMatches.length}, risk areas: ${recommendation.riskAreas.length}`,
+        ENGINE_SWITCHES.LAYER_9_RECOMMENDATION_AI ? "ai" : "rule_fallback",
+        ENGINE_SWITCHES.LAYER_9_RECOMMENDATION_AI ? 0.85 : 0.6,
+        tLayer9,
+        [],
+        `An application recommendation was formed — the assessment is "${recommendation.applicationRecommendation}", based on how well your evidence matches this role's requirements.`,
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer9 failed — continuing:", err);
+      pipelineWarnings.push("Application recommendation couldn't be fully prepared. Your documents are ready.");
+      pipelineTrace.push("Layer9A: recommendation:error:caught");
     }
   }
 
@@ -1991,9 +2440,26 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   };
 
   if (ENGINE_SWITCHES.LAYER_10_BUNDLE_ASSEMBLY) {
-    pipelineTrace.push("Layer10A: bundle-assembly:start");
-    bundle = buildBundleAssembly(bundle);
-    pipelineTrace.push("Layer10A: bundle-assembly:done");
+    try {
+      const tLayer10 = Date.now();
+      pipelineTrace.push("Layer10A: bundle-assembly:start");
+      bundle = buildBundleAssembly(bundle);
+      pipelineTrace.push("Layer10A: bundle-assembly:done");
+      observationPoints.push(makeObservation(
+        "Layer10_BundleAssembly",
+        `Assembling intelligence bundle from all prior layers`,
+        `Bundle assembled: ${Object.keys(bundle).length} top-level fields`,
+        "rule_fallback",
+        0.6,
+        tLayer10,
+        [],
+        "All analysis was packaged into a single generation bundle — this is what drives the CV and cover letter writing.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer10 failed — continuing:", err);
+      pipelineWarnings.push("Some analysis assembly steps didn't complete. Your documents are ready with available insights.");
+      pipelineTrace.push("Layer10A: bundle-assembly:error:caught");
+    }
   }
 
   const positioningBriefText = buildPositioningBriefText(
@@ -2024,10 +2490,31 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
     riskAreas: recommendation.riskAreas,
     blockers: recommendation.blockers,
     bundle: bundle as unknown as Record<string, unknown>,
-    rawResponse: bundle,
+    // rawResponse intentionally omitted — bundle field already is the raw bundle.
+    // Storing it twice doubles state size and causes sessionStorage quota failures.
   };
 
   const runId = createRunId();
+
+  // ── Pre-Layer 11 — Language & Tone Context ──────────────────────────────────
+  // Build JD keyword signals and optionally fetch a company homepage snippet.
+  // Non-blocking: any failure here is silently ignored.
+  const jdBodyText = [
+    ...structuredJob.responsibilities,
+    ...structuredJob.requirements,
+  ].join(" ");
+
+  const companyPageSnippet = normalizedJobUrl
+    ? await fetchCompanyPageSnippet(normalizedJobUrl).catch(() => null)
+    : null;
+
+  const languageContext = buildLanguageContext(jdBodyText, companyPageSnippet);
+
+  pipelineTrace.push(
+    languageContext
+      ? `Layer11_pre: language-context:built (${languageContext.length} chars, company-page: ${companyPageSnippet ? "yes" : "no"})`
+      : "Layer11_pre: language-context:skipped (no JD text)",
+  );
 
   let cvDraft = "";
   let coverLetterDraft = "";
@@ -2038,25 +2525,20 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
   let coverLetterReviewReport: ReviewReport | null = null;
 
   if (ENGINE_SWITCHES.LAYER_11_GENERATION) {
-    pipelineTrace.push("Layer11A: cv-draft:start");
-    cvDraft = buildCvDraft(normalizedCandidateProfile, bundle);
-    pipelineTrace.push("Layer11A: cv-draft:done");
+    try {
+      const tLayer11 = Date.now();
+      pipelineTrace.push("Layer11A: cv-draft:start");
+      // Rule-based draft is the baseline
+      cvDraft = buildCvDraft(normalizedCandidateProfile, bundle);
+      pipelineTrace.push("Layer11A: cv-draft:done");
 
-    pipelineTrace.push("Layer11B: cover-letter:base:start");
-    coverLetterDraft = buildCoverLetterDraft(
-      normalizedCandidateProfile,
-      bundle,
-      normalizedOutputLanguage,
-    );
-    pipelineTrace.push("Layer11B: cover-letter:base:done");
-
-    if (ENGINE_SWITCHES.LAYER_11_COVER_LETTER_AI) {
-      pipelineTrace.push("Layer11C: cover-letter:ai:start");
-
-      const aiCoverLetter = await callAiText(
-        buildGenerateCoverLetterInstructions(
+      // AI CV generation — upgrades the rule-based baseline to a fully tailored document
+      pipelineTrace.push("Layer11A-AI: cv-draft:ai:start");
+      const aiCvDraft = await callAiText(
+        buildGenerateCvInstructions(
           normalizedOutputLanguage,
           "Strong polished professional",
+          languageContext || null,
         ),
         JSON.stringify(
           {
@@ -2067,94 +2549,168 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
           2,
         ),
       );
-
-      if (aiCoverLetter) {
-        coverLetterDraft = aiCoverLetter;
-        pipelineTrace.push("Layer11C: cover-letter:ai:done");
+      if (aiCvDraft) {
+        cvDraft = aiCvDraft;
+        pipelineTrace.push("Layer11A-AI: cv-draft:ai:done");
       } else {
-        pipelineTrace.push("Layer11C: cover-letter:ai:fallback");
+        pipelineTrace.push("Layer11A-AI: cv-draft:ai:fallback");
       }
+
+      pipelineTrace.push("Layer11B: cover-letter:base:start");
+      coverLetterDraft = buildCoverLetterDraft(
+        normalizedCandidateProfile,
+        bundle,
+        normalizedOutputLanguage,
+      );
+      pipelineTrace.push("Layer11B: cover-letter:base:done");
+
+      if (ENGINE_SWITCHES.LAYER_11_COVER_LETTER_AI) {
+        pipelineTrace.push("Layer11C: cover-letter:ai:start");
+
+        const aiCoverLetter = await callAiText(
+          buildGenerateCoverLetterInstructions(
+            normalizedOutputLanguage,
+            "Strong polished professional",
+            languageContext || null,
+          ),
+          JSON.stringify(
+            {
+              candidateProfile: normalizedCandidateProfile,
+              bundle,
+            },
+            null,
+            2,
+          ),
+        );
+
+        if (aiCoverLetter) {
+          coverLetterDraft = aiCoverLetter;
+          pipelineTrace.push("Layer11C: cover-letter:ai:done");
+        } else {
+          pipelineTrace.push("Layer11C: cover-letter:ai:fallback");
+        }
+      }
+
+      observationPoints.push(makeObservation(
+        "Layer11_Generation",
+        `Bundle ready, output language: ${normalizedOutputLanguage}`,
+        `CV draft: ${cvDraft.length} chars, cover letter: ${coverLetterDraft.length} chars`,
+        ENGINE_SWITCHES.LAYER_11_COVER_LETTER_AI ? "ai" : "rule_fallback",
+        ENGINE_SWITCHES.LAYER_11_COVER_LETTER_AI ? 0.85 : 0.6,
+        tLayer11,
+        [],
+        "Your CV and cover letter were drafted using the positioning strategy and evidence assembled in the earlier layers.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer11 failed — continuing:", err);
+      pipelineWarnings.push("One of your documents couldn't be fully generated. Please check and refine the output.");
+      pipelineTrace.push("Layer11A: generation:error:caught");
     }
   }
 
   if (ENGINE_SWITCHES.LAYER_12_REVIEW && ENGINE_SWITCHES.LAYER_12_REVIEW_AI) {
-    pipelineTrace.push("Layer12A: review:start");
+    try {
+      const tLayer12 = Date.now();
+      pipelineTrace.push("Layer12A: review:start");
 
-    const cvReviewResult = await callAiJson<ReviewResult>(
-      buildReviewPrompt(cvDraft, bundle),
-      "Perform the review and return valid JSON only.",
-    );
+      const cvReviewResult = await callAiJson<ReviewResult>(
+        buildReviewPrompt(cvDraft, bundle),
+        "Perform the review and return valid JSON only.",
+      );
 
-    if (cvReviewResult?.improvedDraft) {
-      cvDraft = cvReviewResult.improvedDraft;
-      pipelineTrace.push("Layer12A: review:cv:improved");
-    } else {
-      pipelineTrace.push("Layer12A: review:cv:kept-original");
+      if (cvReviewResult?.improvedDraft) {
+        cvDraft = cvReviewResult.improvedDraft;
+        pipelineTrace.push("Layer12A: review:cv:improved");
+      } else {
+        pipelineTrace.push("Layer12A: review:cv:kept-original");
+      }
+
+      cvReviewReport = normalizeReviewReport(cvReviewResult?.reviewReport);
+      pipelineTrace.push(
+        cvReviewReport ? "Layer12A: review:cv:report" : "Layer12A: review:cv:no-report",
+      );
+
+      const coverLetterReviewResult = await callAiJson<ReviewResult>(
+        buildReviewPrompt(coverLetterDraft, bundle),
+        "Perform the review and return valid JSON only.",
+      );
+
+      if (coverLetterReviewResult?.improvedDraft) {
+        coverLetterDraft = coverLetterReviewResult.improvedDraft;
+        pipelineTrace.push("Layer12A: review:cover-letter:improved");
+      } else {
+        pipelineTrace.push("Layer12A: review:cover-letter:kept-original");
+      }
+
+      coverLetterReviewReport = normalizeReviewReport(
+        coverLetterReviewResult?.reviewReport,
+      );
+      pipelineTrace.push(
+        coverLetterReviewReport
+          ? "Layer12A: review:cover-letter:report"
+          : "Layer12A: review:cover-letter:no-report",
+      );
+
+      reviewFindings = {
+        cv: cvReviewReport,
+        coverLetter: coverLetterReviewReport,
+      };
+
+      pipelineTrace.push(
+        cvReviewResult || coverLetterReviewResult
+          ? "Layer12A: review:done"
+          : "Layer12A: review:fallback",
+      );
+
+      observationPoints.push(makeObservation(
+        "Layer12_Review",
+        `CV: ${cvDraft.length} chars, cover letter: ${coverLetterDraft.length} chars`,
+        `CV truth check: "${cvReviewReport?.truthCheck ?? "n/a"}", cover letter inflation risk: "${coverLetterReviewReport?.inflationRisk ?? "n/a"}"`,
+        "ai",
+        cvReviewResult || coverLetterReviewResult ? 0.85 : 0.4,
+        tLayer12,
+        [],
+        "The drafts were reviewed for factual accuracy, relevance, and inflation before being finalised. Any unsupported claims were identified and corrected.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer12 failed — continuing:", err);
+      pipelineWarnings.push("The final review step didn't complete. Your drafted documents are ready.");
+      pipelineTrace.push("Layer12A: review:error:caught");
     }
-
-    cvReviewReport = normalizeReviewReport(cvReviewResult?.reviewReport);
-    pipelineTrace.push(
-      cvReviewReport ? "Layer12A: review:cv:report" : "Layer12A: review:cv:no-report",
-    );
-
-    const coverLetterReviewResult = await callAiJson<ReviewResult>(
-      buildReviewPrompt(coverLetterDraft, bundle),
-      "Perform the review and return valid JSON only.",
-    );
-
-    if (coverLetterReviewResult?.improvedDraft) {
-      coverLetterDraft = coverLetterReviewResult.improvedDraft;
-      pipelineTrace.push("Layer12A: review:cover-letter:improved");
-    } else {
-      pipelineTrace.push("Layer12A: review:cover-letter:kept-original");
-    }
-
-    coverLetterReviewReport = normalizeReviewReport(
-      coverLetterReviewResult?.reviewReport,
-    );
-    pipelineTrace.push(
-      coverLetterReviewReport
-        ? "Layer12A: review:cover-letter:report"
-        : "Layer12A: review:cover-letter:no-report",
-    );
-
-    reviewFindings = {
-      cv: cvReviewReport,
-      coverLetter: coverLetterReviewReport,
-    };
-
-    pipelineTrace.push(
-      cvReviewResult || coverLetterReviewResult
-        ? "Layer12A: review:done"
-        : "Layer12A: review:fallback",
-    );
   }
 
-  const warnings = Array.from(
-    new Set([...(jobProfile.warnings ?? []), ...recommendation.riskAreas]),
-  );
+  // Warnings = blockers: things that could actively damage the application (hard knockout risks).
+  // Risk areas = riskAreas: gaps or weaknesses in the candidature (shown separately on Final page).
+  // These must be distinct so the Final page can surface them as genuinely different sections.
+  const warnings = Array.from(new Set([...recommendation.blockers, ...pipelineWarnings]));
 
   const finalDrafts: WorkspaceFinalDrafts = {
     cvDraft,
     coverLetterDraft,
     finalCv: cvDraft,
     finalCoverLetter: coverLetterDraft,
-    drafts: {
-      cvDraft,
-      coverLetterDraft,
-      finalCv: cvDraft,
-      finalCoverLetter: coverLetterDraft,
-    },
+    // drafts intentionally omitted — cvDraft/finalCv above already carry the text.
+    // Storing all four again doubles the state size and risks sessionStorage quota failures.
     outputLanguage: normalizedOutputLanguage,
     status: "ready",
     runId,
     warnings,
     reviewFindings,
-    rawResponse: {
-      warnings,
-      reviewFindings,
-    },
   };
+
+  console.log("[runTailoringPipeline] completed:", {
+    runId,
+    recommendation: recommendation.applicationRecommendation,
+    selectedEvidenceCount: selectedEvidence.combinedTopEvidence.length,
+    missingSignalsCount: missingSignals.length,
+    riskAreasCount: recommendation.riskAreas.length,
+    blockersCount: recommendation.blockers.length,
+    warningsCount: warnings.length,
+    cvDraftLength: cvDraft.length,
+    coverLetterDraftLength: coverLetterDraft.length,
+    finalDraftsFinalCvLength: finalDrafts.finalCv?.length ?? 0,
+    pipelineTraceLength: pipelineTrace.length,
+  });
 
   return {
     ok: true,
@@ -2163,6 +2719,9 @@ const normalizedCandidateProfile = asRecord(candidateProfile);
     structuredJob,
     insights,
     finalDrafts,
+    jdQualityAnalysis,
+    jdQualityGate,
+    observationPoints,
     telemetry: {
       runId,
       outcome:

@@ -1,15 +1,14 @@
 export function buildGenerateCvInstructions(
-  locale: "en" | "de",
+  locale: string,
   writingLevel:
     | "Simple professional"
     | "B2 professional"
     | "C1 professional"
-    | "Strong polished professional"
+    | "Strong polished professional",
+  languageContext?: string | null,
 ): string {
-  const languageHint =
-    locale === "de"
-      ? "Write the CV in German. Keep the wording contemporary, credible, and suitable for the German market."
-      : "Write the CV in English. Keep the wording contemporary, credible, and suitable for professional applications.";
+  const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
+  const languageHint = `Write the CV in ${languageName}. Keep the wording contemporary, credible, and suitable for professional applications.`;
 
   return `
 You write the final tailored CV draft for an AI job application assistant.
@@ -118,7 +117,20 @@ OUTPUT FORMAT RULES
 - Include a name line only if the full name is available in the source.
 - Keep spacing clean and readable.
 
-Target language: ${locale === "de" ? "German" : "English"}
+FORMATTING RULES FOR ROLES
+
+For each role in the experience section, use this layout:
+
+  Role Title
+  Company Name, Location · Start – End
+
+Then 2–5 achievement bullets below, each on its own line starting with a dash.
+Leave a blank line between roles for breathing room.
+Keep all body text in clean, complete sentences suited to justified paragraph layout.
+
+--------------------------------------------------
+
+${languageContext ? `${languageContext}\n\n--------------------------------------------------\n\n` : ""}Target language: ${languageName}
 Writing level: ${writingLevel}
 
 ${languageHint}

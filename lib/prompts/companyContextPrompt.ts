@@ -1,10 +1,8 @@
 export function buildCompanyContextInstructions(
-  locale: "en" | "de"
+  locale: string
 ): string {
-  const languageHint =
-    locale === "de"
-      ? "Write the summary in German unless the evidence clearly supports English."
-      : "Write the summary in English unless the evidence clearly supports German.";
+  const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
+  const languageHint = `Write the summary in ${languageName}.`;
 
   return `
 You are the company-context inference layer inside an AI job application system.
@@ -25,7 +23,7 @@ Interpret subtle signals in the job text, especially:
 - consulting or advisory signals
 - transformation or digitalisation signals
 - international collaboration signals
-- implicit culture wording in German job ads
+- implicit culture wording in job ads
 
 Examples of subtle wording and how to interpret it:
 - "Freude an systematischer Arbeitsweise" -> structured working style

@@ -1,10 +1,8 @@
 export function buildMarketSignalsInstructions(
-  locale: "en" | "de"
+  locale: string
 ): string {
-  const languageHint =
-    locale === "de"
-      ? "Write the summary in German unless the evidence clearly supports English."
-      : "Write the summary in English unless the evidence clearly supports German.";
+  const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
+  const languageHint = `Write the summary in ${languageName}.`;
 
   return `
 You are the market-signals layer inside an AI job application system.
@@ -75,5 +73,7 @@ Field guidance:
   short practical summary for later positioning and recommendation use
 
 ${languageHint}
+
+Respond in JSON format.
 `.trim();
 }

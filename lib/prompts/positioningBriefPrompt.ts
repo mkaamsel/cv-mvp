@@ -6,17 +6,15 @@ export function buildPositioningBriefPrompt({
   companyContextJson,
   selectedEvidenceJson,
 }: {
-  locale?: "en" | "de";
+  locale?: string;
   candidateProfileJson: string;
   structuredJobJson: string;
   requiredProfileJson: string;
   companyContextJson: string;
   selectedEvidenceJson: string;
 }) {
-  const languageHint =
-    locale === "de"
-      ? "Write all free-text fields in German unless the evidence clearly requires English."
-      : "Write all free-text fields in English unless the evidence clearly requires German.";
+  const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
+  const languageHint = `Write all free-text fields in ${languageName}.`;
 
   return `
 You are the positioning strategist inside an AI job application system.
@@ -55,68 +53,70 @@ CORE RULES
 2. SelectedEvidence is the primary factual source.
 3. CandidateProfile is supporting context but must not justify unsupported claims.
 4. Position the candidate as strongly as the evidence allows — but no stronger.
-5. If a central requirement is weak or missing, it must appear in positioningRisks.
-6. Distinguish clearly between:
-   - direct evidence
-   - adjacent or transferable evidence
-   - missing evidence
-7. Avoid motivational or flattering language.
-8. Prefer practical professional reasoning over marketing language.
-9. Return valid JSON only.
+5. Hard blockers outweigh soft strengths. Always.
+6. Direct evidence beats inferred possibility.
+7. Qualifications and experience are separate dimensions. Do not conflate them.
+8. If a mandatory requirement is not evidenced, it must appear in positioningRisks
+   and must reduce positioningStrength accordingly.
+9. Do not inflate support exposure into ownership. Distinguish clearly between:
+   - owned responsibility: the candidate clearly ran or delivered this
+   - support exposure: the candidate assisted or was involved
+   - adjacent familiarity: similar but not the same
+   - domain awareness only: general familiarity without operational evidence
+10. Avoid motivational or flattering language.
+11. Prefer practical professional reasoning over marketing language.
+12. Return valid JSON only.
 
 --------------------------------------------------
 
 POSITIONING LOGIC
 
-Evaluate the role in four steps.
+Evaluate in this exact order.
 
-STEP 1 — CORE ROLE REQUIREMENTS
+PHASE 1 — KNOCKOUT CHECK
 
-Identify the requirements that appear central to day-to-day success.
+Before positioning anything, check whether hard blockers exist:
+- missing mandatory qualification or credential
+- missing required language level
+- missing regulated professional status
+- clearly absent must-have experience when stated as essential
 
-Determine which of these are:
+If a hard blocker is present:
+- positioningStrength must be "measured"
+- the blocker must appear in positioningRisks
+- positioningStrategy must acknowledge the gap honestly
 
-• directly supported by evidence  
-• indirectly supported by adjacent experience  
-• missing or weak  
+PHASE 2 — TASK FIT REVIEW
 
---------------------------------------------------
+Evaluate the candidate's experience against the role's core tasks.
 
-STEP 2 — DIRECT STRENGTHS
+For each core task, classify the candidate's evidence as:
+- owned responsibility
+- support exposure
+- adjacent familiarity
+- domain awareness only
 
-Identify the strongest evidence that clearly aligns with the role.
+Use this classification to drive coreWhyFit and cvEmphasis.
+Only claim owned responsibility when the CV clearly supports it.
 
-Prioritize:
+PHASE 3 — QUALIFICATION AND POSSESSION REVIEW
 
-• responsibilities that closely match the job
-• tools or systems mentioned in the job
-• relevant domain exposure
-• stakeholder interaction signals
+Evaluate formal signals separately from experience:
+- degree level and field match
+- certifications and licenses
+- language requirements
+- regulated professional status
+- system or tool possession
 
---------------------------------------------------
+Qualifications that are present should appear in coreWhyFit.
+Qualifications that are missing should appear in positioningRisks.
 
-STEP 3 — POSITIONING RISKS
+PHASE 4 — POSITIONING STRATEGY
 
-Identify realistic concerns a hiring manager might have.
-
-Examples:
-• domain gap
-• tool gap
-• seniority mismatch
-• overqualification risk
-• missing specific exposure
-
-Do not exaggerate risks, but do not hide them either.
-
---------------------------------------------------
-
-STEP 4 — POSITIONING STRATEGY
-
-Define the most credible positioning approach:
-
-• what should the CV emphasize
-• what the cover letter should explain
-• how the candidate’s narrative should be framed
+Based on the above, define the most credible positioning approach:
+- what the CV should emphasize
+- what the cover letter should explain
+- how the candidate's narrative should be framed
 
 --------------------------------------------------
 
@@ -124,45 +124,54 @@ OUTPUT FIELD GUIDANCE
 
 positioningStrength
 
-"measured"  
-Fit exists but meaningful gaps or adjacency remain.
+"measured"
+Fit exists but meaningful gaps, adjacency, or a hard blocker remain.
+Use when a mandatory requirement is missing, or fit is mostly adjacent.
 
-"solid"  
-Most central requirements have credible evidence.
+"solid"
+Most central requirements have credible direct evidence.
+No hard blockers. Some gaps may exist but do not undermine the application.
 
-"strong"  
-Evidence clearly supports the core responsibilities.
+"strong"
+Evidence clearly and directly supports the core responsibilities and requirements.
+No hard blockers. Strong task fit and qualification match.
 
 --------------------------------------------------
 
 positioningTone
 
-"specialist"  
+"specialist"
 Hands-on contributor framing.
 
-"senior_specialist"  
+"senior_specialist"
 Experienced independent contributor.
 
-"leadership_adjacent"  
-Coordination, ownership, influence, or project leadership without overstating formal people management.
+"leadership_adjacent"
+Coordination, ownership, influence, or project leadership
+without overstating formal people management.
 
 --------------------------------------------------
 
 coreWhyFit
 
 3-6 concise evidence-based reasons why the candidate can plausibly perform the role.
+Each reason must be grounded in direct CV evidence.
+Do not include adjacent or speculative fit here.
 
 --------------------------------------------------
 
 positioningRisks
 
 Real gaps, risks, or sensitivities that should influence the positioning.
+Must include any hard blockers from Phase 1.
+Must include any mandatory requirements that are not evidenced.
 
 --------------------------------------------------
 
 positioningStrategy
 
 Short paragraph describing the most credible strategic framing.
+Must be honest about gaps if they exist.
 
 --------------------------------------------------
 
@@ -175,6 +184,7 @@ Short paragraph explaining what the cover letter should emphasize.
 cvEmphasis
 
 3-7 short bullets describing what should be brought forward in the CV.
+Ground each in owned responsibilities or direct qualifications only.
 
 --------------------------------------------------
 

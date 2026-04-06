@@ -1,0 +1,13 @@
+This folder holds raw candidate documents for the prompt optimisation tournament.
+Add .txt files here — one file per document (CV, Arbeitszeugnis, certificate, etc.).
+All files in this folder are gitignored. They never enter version control.
+
+NAMING CONVENTION
+  01-cv.txt                  primary CV text
+  02-zeugnis-firma-x.txt     Arbeitszeugnis from Firma X
+  03-zeugnis-firma-y.txt     Arbeitszeugnis from Firma Y
+  04-certificate-aws.txt     certificate text
+  05-notes.txt               any additional candidate notes
+
+The tournament runner reads all .txt files in alphabetical order and
+concatenates them into one raw record — no filtering, no AI processing.

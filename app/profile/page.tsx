@@ -67,7 +67,20 @@ type VerifiedClaim = {
   confidence: "high" | "medium";
 };
 
+type CorrectionLogEntry = {
+  id: string;
+  timestamp: string;
+  field: string;
+  action: "add" | "remove" | "update";
+  value: unknown;
+  userInstruction: string;
+  sourceType: "user_prompt";
+  sourceDetail: string;
+  language: string;
+};
+
 type CandidateProfile = {
+  schemaVersion?: number;
   fullName: string | null;
   headline: string | null;
   summary: string | null;
@@ -84,6 +97,12 @@ type CandidateProfile = {
   constraints: string[];
   verifiedClaims: VerifiedClaim[];
   openQuestions: string[];
+  // v2 language + correction fields
+  detectedInputLanguages?: string[];
+  interactionLanguage?: string;
+  preferredOutputLanguage?: string;
+  outputLanguageLockedByUser?: boolean;
+  correctionLog?: CorrectionLogEntry[];
 };
 
 type ExtractCandidateProfileResponse =
@@ -108,6 +127,7 @@ type SuggestedAction =
   | "add_user_note"
   | "click_build_profile"
   | "answer_active_prompt"
+  | "correction_applied"
   | "no_action";
 
 type ProfileChatResponse =
@@ -117,6 +137,10 @@ type ProfileChatResponse =
       answeredActivePrompt: boolean;
       shouldCaptureAsNote: boolean;
       suggestedAction?: SuggestedAction;
+      detectedLanguage?: "en" | "de" | "es";
+      correctionApplied?: boolean;
+      correctedProfile?: CandidateProfile | null;
+      correctionEntry?: CorrectionLogEntry | null;
     }
   | {
       ok: false;
@@ -190,7 +214,7 @@ export default function ProfilePage(): React.JSX.Element {
   const isHydratingWorkspaceRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [locale, setLocale] = useState<"en" | "de">("en");
+  const [locale, setLocale] = useState<"en" | "de" | "es">("en");
   const [documents, setDocuments] = useState<InputDocument[]>([]);
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [draftSource, setDraftSource] = useState<DraftSource>(createEmptyDraft("primary_cv"));
@@ -298,8 +322,10 @@ export default function ProfilePage(): React.JSX.Element {
       }
 
       const savedLocale =
-        data.workspace.meta.locale === "de" || data.workspace.meta.locale === "en"
-          ? (data.workspace.meta.locale as "en" | "de")
+        data.workspace.meta.locale === "de" ||
+        data.workspace.meta.locale === "en" ||
+        data.workspace.meta.locale === "es"
+          ? (data.workspace.meta.locale as "en" | "de" | "es")
           : null;
 
       if (savedLocale) {
@@ -320,7 +346,7 @@ export default function ProfilePage(): React.JSX.Element {
     } catch (caughtError) {
       const message =
         caughtError instanceof Error ? caughtError.message : "Could not load saved workspace.";
-      setWorkspaceStatus("Workspace load failed.");
+      setWorkspaceStatus("We couldn't load your workspace.");
       appendMessage(createAssistantMessage("error", message));
       hasLoadedWorkspaceRef.current = true;
     } finally {
@@ -368,7 +394,7 @@ export default function ProfilePage(): React.JSX.Element {
           : "Workspace saved"
       );
     } catch {
-      setWorkspaceStatus("Workspace save failed.");
+      setWorkspaceStatus("We couldn't save your workspace.");
     }
   }
 
@@ -421,7 +447,7 @@ export default function ProfilePage(): React.JSX.Element {
       const data = (await response.json()) as ExtractDocxResponse;
 
       if (!response.ok || !data.ok) {
-        throw new Error(data.ok ? "DOCX extraction failed." : data.error);
+        throw new Error(data.ok ? "We couldn't read that document. Please try again or paste the text directly." : data.error);
       }
 
       setSelectedStoredDocumentId(null);
@@ -451,7 +477,7 @@ export default function ProfilePage(): React.JSX.Element {
       }
     } catch (caughtError) {
       const message =
-        caughtError instanceof Error ? caughtError.message : "DOCX upload failed.";
+        caughtError instanceof Error ? caughtError.message : "We couldn't upload that file. Please try again.";
       setError(message);
       appendMessage(createAssistantMessage("error", message));
     } finally {
@@ -554,7 +580,7 @@ export default function ProfilePage(): React.JSX.Element {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          locale,
+          outputLanguage: locale,
           documents: validDocuments.map((doc) => ({
             fileName: doc.fileName,
             kind: doc.kind,
@@ -563,6 +589,9 @@ export default function ProfilePage(): React.JSX.Element {
               : doc.text,
             isPrimary: doc.kind === "primary_cv",
           })),
+          // Net add rule: when a profile already exists, run in enrichment mode.
+          // The extraction route will preserve all data and user corrections.
+          ...(profile ? { existingProfile: profile } : {}),
         }),
       });
 
@@ -621,7 +650,7 @@ export default function ProfilePage(): React.JSX.Element {
     setIsChatting(true);
 
     try {
-      const response = await fetch("/api/profile-chat", {
+      const response = await fetch("/api/profile/profile-chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -638,10 +667,47 @@ export default function ProfilePage(): React.JSX.Element {
       const data = (await response.json()) as ProfileChatResponse;
 
       if (!response.ok || !data.ok) {
-        throw new Error(data.ok ? "Profile chat failed." : data.error);
+        throw new Error(data.ok ? "Something went wrong. Please try again." : data.error);
       }
 
       appendMessage(createAssistantMessage("neutral", data.assistantMessage));
+
+      // Auto-follow user language — update locale immediately if they switched
+      if (data.detectedLanguage && data.detectedLanguage !== locale) {
+        setLocale(data.detectedLanguage);
+      }
+
+      // Apply profile correction if the AI made one
+      if (data.correctionApplied && data.correctedProfile) {
+        const corrected = data.correctedProfile;
+        const entry = data.correctionEntry;
+
+        setProfile((prev) => {
+          if (!prev) return corrected;
+          // Merge: keep all v2 metadata from previous profile, apply corrected data.
+          // Append the new correction entry to the permanent log.
+          const existingLog: CorrectionLogEntry[] = prev.correctionLog ?? [];
+          const updatedLog = entry ? [...existingLog, entry] : existingLog;
+          return {
+            ...corrected,
+            schemaVersion: 2,
+            detectedInputLanguages: prev.detectedInputLanguages,
+            interactionLanguage: data.detectedLanguage ?? prev.interactionLanguage,
+            preferredOutputLanguage: prev.preferredOutputLanguage,
+            outputLanguageLockedByUser: prev.outputLanguageLockedByUser,
+            correctionLog: updatedLog,
+          };
+        });
+
+        appendMessage(
+          createAssistantMessage(
+            "success",
+            entry
+              ? `Correction logged. ${entry.value as string}`
+              : "Profile updated."
+          )
+        );
+      }
 
       if (data.shouldCaptureAsNote) {
         setDraftSource({
@@ -717,11 +783,12 @@ export default function ProfilePage(): React.JSX.Element {
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
             <select
               value={locale}
-              onChange={(event) => setLocale(event.target.value as "en" | "de")}
+              onChange={(event) => setLocale(event.target.value as "en" | "de" | "es")}
               style={selectStyle}
             >
               <option value="en">English</option>
               <option value="de">German</option>
+              <option value="es">Spanish</option>
             </select>
 
             <button type="button" onClick={handleBuildProfile} style={buttonStyle}>
@@ -1148,8 +1215,8 @@ export default function ProfilePage(): React.JSX.Element {
                     <FeedbackStars
   runId={workspaceLoadedAt || "profile-stage"}
   stage="profile_build"
-  prompt={locale === "de" ? "Diesen Schritt bewerten" : "Rate this step"}
-  locale={locale}
+  prompt={locale === "de" ? "Diesen Schritt bewerten" : locale === "es" ? "Valorar este paso" : "Rate this step"}
+  locale={locale === "de" ? "de" : "en"}
 />
                   </div>
                 </ProfilePanel>
@@ -1232,7 +1299,7 @@ export default function ProfilePage(): React.JSX.Element {
 function persistProfileForTailoring(
   nextProfile: CandidateProfile,
   sourceDocs: InputDocument[],
-  localeValue: "en" | "de",
+  localeValue: "en" | "de" | "es",
   readinessLabel: string
 ): void {
   if (typeof window === "undefined") return;

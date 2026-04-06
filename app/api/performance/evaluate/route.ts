@@ -957,7 +957,7 @@ if ((dailyEvaluationCount ?? 0) >= 20) {
   return NextResponse.json(
     {
       ok: false,
-      error: "Daily evaluation limit reached. Please try again tomorrow.",
+      error: "You've used all your evaluation runs for today. Your allowance resets at midnight — come back tomorrow and we'll keep going.",
     },
     { status: 429 }
   );

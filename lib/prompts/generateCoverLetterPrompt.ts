@@ -1,15 +1,14 @@
 export function buildGenerateCoverLetterInstructions(
-  locale: "en" | "de",
+  locale: string,
   writingLevel:
     | "Simple professional"
     | "B2 professional"
     | "C1 professional"
-    | "Strong polished professional"
+    | "Strong polished professional",
+  languageContext?: string | null,
 ): string {
-  const languageHint =
-    locale === "de"
-      ? "Write the cover letter in German. Use contemporary, credible language suitable for real applications in Germany."
-      : "Write the cover letter in English. Use contemporary, credible language suitable for real professional applications.";
+  const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
+  const languageHint = `Write the cover letter in ${languageName}. Use contemporary, credible language suitable for real professional applications.`;
 
   const formatHint =
     locale === "de"
@@ -24,7 +23,7 @@ For German output, write the letter in a format aligned with standard German bus
 - if structural details are missing, omit them rather than inventing them
 `
       : `
-For English output, use a clean professional business-letter structure.
+For ${languageName} output, use a clean professional business-letter structure.
 If structural details are missing, omit them rather than inventing them.
 `;
 
@@ -35,6 +34,12 @@ Salutation rules:
 - If a named contact is available, use the appropriate formal salutation.
 - If no named contact is available, use "Sehr geehrte Damen und Herren," only as a fallback.
 - Prefer a more specific hiring-team salutation only if clearly supported by the context.
+`
+      : locale === "es"
+      ? `
+Salutation rules:
+- If a named contact is available, use the appropriate formal salutation.
+- If no named contact is available, use "Estimado equipo de selección," as a fallback.
 `
       : `
 Salutation rules:
@@ -102,20 +107,17 @@ POSITIONING RULES
 4. Do not merely restate the CV line by line.
 5. Do not turn adjacent evidence into direct evidence.
 6. If a central requirement is only indirectly supported, phrase that carefully.
-7. Show why the application is plausible and relevant, not “perfect.”
+7. Show why the application is plausible and relevant, not "perfect."
 
 --------------------------------------------------
 
-GERMAN STYLE RULES
+STYLE RULES
 
-For German output:
-- keep the tone contemporary, direct, and professional
-- avoid stiff legacy phrasing and avoid overly casual phrasing
-- avoid bureaucratic heaviness
-- prefer active sentences
-- prefer short to medium sentence length
-- make each paragraph carry a clear purpose
-- the result should read like a strong modern German application letter, not a school essay and not marketing copy
+Keep the tone contemporary, direct, and professional.
+Avoid stiff legacy phrasing and avoid overly casual phrasing.
+Prefer active sentences and short to medium sentence length.
+Make each paragraph carry a clear purpose.
+The result should read like a strong modern professional letter, not a school essay and not marketing copy.
 
 --------------------------------------------------
 
@@ -143,7 +145,7 @@ Before finalizing, check:
 - Does any sentence sound copied, generic, or AI-smoothed?
 - Does every strength claim have real support?
 - Is the language specific enough to feel personal and credible?
-- Would this sound plausible coming from the candidate in a real German application?
+- Would this sound plausible coming from the candidate in a real application?
 
 If not, rewrite until it does.
 
@@ -155,8 +157,12 @@ OUTPUT FORMAT RULES
 - No markdown code fences.
 - No commentary before or after the letter.
 - Keep spacing clean and readable.
+- Write body paragraphs in complete, balanced sentences suited to justified text layout.
+- Aim for 3–5 sentences per paragraph — avoid very short fragments or run-on paragraphs.
 
-Target language: ${locale === "de" ? "German" : "English"}
+--------------------------------------------------
+
+${languageContext ? `${languageContext}\n\n--------------------------------------------------\n\n` : ""}Target language: ${languageName}
 Writing level: ${writingLevel}
 
 ${languageHint}

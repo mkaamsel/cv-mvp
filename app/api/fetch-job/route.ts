@@ -1,109 +1,94 @@
+/**
+ * fetch-job — HTML fetcher and noise stripper.
+ *
+ * Fetches a job posting URL, removes all noise (navigation, banners, footers,
+ * cookie prompts, sidebars) using HTML structure anchors, and returns clean
+ * text containing only the real job content.
+ *
+ * No AI. No extraction. Pure signal stripping.
+ *
+ * HTML cleaning logic lives in lib/utils/cleanJobHtml.ts.
+ */
+
 import { NextRequest, NextResponse } from "next/server";
+import {
+  FETCH_HEADERS,
+  removeNoise,
+  extractMainBlock,
+  htmlToText,
+  isBlockedOrThin,
+} from "@/lib/utils/cleanJobHtml";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+// ── Readable fallback (Jina AI) ───────────────────────────────────────────────
+
+async function fetchReadableFallback(url: string): Promise<string> {
+  const readableUrl = `https://r.jina.ai/${url}`;
+  const res = await fetch(readableUrl, { headers: FETCH_HEADERS });
+  if (!res.ok) throw new Error(`Readable fallback ${res.status}`);
+  return res.text();
+}
+
+// ── Route handler ─────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { url } = body;
+    const body = (await req.json()) as { url?: string };
 
-    if (!url) {
-      return NextResponse.json(
-        { error: "No URL provided." },
-        { status: 400 }
-      );
+    if (!body.url?.trim()) {
+      return NextResponse.json({ ok: false, error: "No URL provided." }, { status: 400 });
     }
 
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; JobParserBot/1.0)"
-      }
-    });
+    const url = body.url.trim();
 
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: "Unable to fetch the job page." },
-        { status: 500 }
-      );
-    }
-
-    const html = await response.text();
-
-    const systemPrompt = `
-You extract structured job information from web pages.
-
-Your task is to read raw HTML and extract the following information if available:
-
-- Company name
-- Job title
-- Location
-- Responsibilities
-- Requirements / profile
-- Industry
-- Technologies mentioned
-- Seniority level
-
-Return JSON only in this format:
-
-{
- "companyName": "",
- "jobTitle": "",
- "location": "",
- "responsibilities": [],
- "requirements": [],
- "industry": "",
- "technologies": [],
- "seniorityLevel": ""
-}
-`;
-
-    const userPrompt = `
-Extract job information from this HTML page:
-
-${html}
-`;
-
-    const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ]
-      }),
-    });
-
-    const data = await aiResponse.json();
-    const content = data?.choices?.[0]?.message?.content;
-
-    if (!content) {
-      return NextResponse.json(
-        { error: "AI could not extract job information." },
-        { status: 500 }
-      );
-    }
-
-    let parsed;
+    // Attempt 1: direct fetch
+    let cleanText = "";
+    let source: "direct" | "readable-fallback" = "direct";
 
     try {
-      parsed = JSON.parse(content);
+      const res = await fetch(url, { headers: FETCH_HEADERS, redirect: "follow" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const noiseStripped = removeNoise(html);
+      const mainBlock = extractMainBlock(noiseStripped);
+      cleanText = htmlToText(mainBlock);
     } catch {
+      // fall through to readable fallback
+    }
+
+    // Attempt 2: Jina readable fallback
+    if (isBlockedOrThin(cleanText)) {
+      try {
+        const fallback = await fetchReadableFallback(url);
+        if (fallback.length > cleanText.length) {
+          cleanText = fallback;
+          source = "readable-fallback";
+        }
+      } catch {
+        // fallback also failed
+      }
+    }
+
+    if (isBlockedOrThin(cleanText)) {
       return NextResponse.json(
-        { error: "AI returned invalid JSON.", raw: content },
-        { status: 500 }
+        {
+          ok: false,
+          error:
+            "This page could not be extracted cleanly — it may be behind a login or blocking automated access. Please paste the job text directly.",
+          source: "blocked",
+        },
+        { status: 422 },
       );
     }
 
-    return NextResponse.json(parsed);
-
-  } catch (error) {
+    return NextResponse.json({ ok: true, cleanText, source });
+  } catch (err) {
+    console.error("[fetch-job]", err);
     return NextResponse.json(
-      { error: "Unexpected server error." },
-      { status: 500 }
+      { ok: false, error: "Unexpected error fetching job page." },
+      { status: 500 },
     );
   }
 }

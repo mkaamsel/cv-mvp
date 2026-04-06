@@ -142,6 +142,10 @@ export default function NavBar() {
                 Tailoring
               </Link>
 
+              <Link href="/settings" style={navLinkStyle}>
+                Settings
+              </Link>
+
               <button type="button" onClick={handleLogout} style={secondaryButtonStyle}>
                 Log out
               </button>

@@ -1,0 +1,56 @@
+[
+  {
+    "cvId": "CV_02",
+    "jdId": "JD_02",
+    "code": "1",
+    "result": {
+      "cvId": "CV_02",
+      "jdId": "JD_02",
+      "code": "1",
+      "verdict": "partial_fit",
+      "summary": "Code 1 stricter possession logic.",
+      "taskMatchScore": 50,
+      "capabilityMatchScore": 50,
+      "possessionMatchScore": 50,
+      "hardGateFailed": false,
+      "decisionFactors": []
+    },
+    "savedAt": "2026-04-03T22:31:06.992Z"
+  },
+  {
+    "cvId": "CV_01",
+    "jdId": "JD_02",
+    "code": "1",
+    "result": {
+      "cvId": "CV_01",
+      "jdId": "JD_02",
+      "code": "1",
+      "verdict": "partial_fit",
+      "summary": "Code 1 stricter possession logic.",
+      "taskMatchScore": 50,
+      "capabilityMatchScore": 50,
+      "possessionMatchScore": 50,
+      "hardGateFailed": false,
+      "decisionFactors": []
+    },
+    "savedAt": "2026-04-03T22:31:16.932Z"
+  },
+  {
+    "cvId": "CV_01",
+    "jdId": "JD_02",
+    "code": "2",
+    "result": {
+      "cvId": "CV_01",
+      "jdId": "JD_02",
+      "code": "2",
+      "verdict": "partial_fit",
+      "summary": "Code 2 stricter possession logic.",
+      "taskMatchScore": 50,
+      "capabilityMatchScore": 50,
+      "possessionMatchScore": 50,
+      "hardGateFailed": false,
+      "decisionFactors": []
+    },
+    "savedAt": "2026-04-03T22:31:24.311Z"
+  }
+]

@@ -1,12 +1,10 @@
 import { APPLICATION_RECOMMENDATION_PROMPT } from "@/lib/tailoring/application-recommendation";
 
 export function buildApplicationRecommendationInstructions(
-  locale: "en" | "de"
+  locale: string
 ): string {
-  const languageHint =
-    locale === "de"
-      ? "Write all free-text fields in German unless the job or user context clearly requires English."
-      : "Write all free-text fields in English unless the job or user context clearly requires German.";
+  const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
+  const languageHint = `Write all free-text fields in ${languageName}.`;
 
   return `
 ${APPLICATION_RECOMMENDATION_PROMPT}

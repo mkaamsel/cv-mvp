@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import AppCard from "@/components/ui/AppCard";
 import SectionLabel from "@/components/ui/SectionLabel";
@@ -14,8 +14,10 @@ import { designTokens } from "@/lib/design/tokens";
 
 const t = designTokens;
 
+// ── Utility helpers ───────────────────────────────────────────────────────────
+
 function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object"
+  return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
@@ -30,30 +32,7 @@ function asStringArray(value: unknown): string[] {
     : [];
 }
 
-function stringifyUnknown(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value == null) return "";
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-async function copy(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // ignore clipboard errors
-  }
-}
-
-function formatOutputLanguage(value: string | undefined): string {
-  if (value === "de") return "German";
-  if (value === "en") return "English";
-  if (!value) return "English";
-  return value;
-}
+// ── Extraction helpers ────────────────────────────────────────────────────────
 
 function extractFinalCv(finalDrafts: WorkspaceFinalDrafts | null): string {
   return (
@@ -61,7 +40,7 @@ function extractFinalCv(finalDrafts: WorkspaceFinalDrafts | null): string {
     finalDrafts?.cvDraft ||
     asString(asRecord(finalDrafts?.drafts)?.finalCv) ||
     asString(asRecord(finalDrafts?.drafts)?.cvDraft) ||
-    "No final CV available yet. Analyse a role first."
+    ""
   );
 }
 
@@ -73,195 +52,61 @@ function extractFinalCoverLetter(
     finalDrafts?.coverLetterDraft ||
     asString(asRecord(finalDrafts?.drafts)?.finalCoverLetter) ||
     asString(asRecord(finalDrafts?.drafts)?.coverLetterDraft) ||
-    "No final cover letter available yet. Analyse a role first."
+    ""
   );
 }
 
-function extractPositioningBrief(insights: WorkspaceInsights | null): string {
-  if (!insights) return "No positioning brief available yet.";
-
-  const positioningRecord = asRecord(insights.positioningBrief);
-
+function extractJobTitle(state: {
+  insights: WorkspaceInsights | null;
+  jobProfile: Record<string, unknown> | null;
+}): string {
   return (
-    asString(insights.positioningBrief) ||
-    insights.positioningStrategy ||
-    asString(positioningRecord?.positioningStrategy) ||
-    asString(positioningRecord?.coverLetterAngle) ||
-    (() => {
-      const whyFit = asStringArray(positioningRecord?.coreWhyFit);
-      return whyFit.length
-        ? whyFit.map((item) => `• ${item}`).join("\n")
-        : null;
-    })() ||
-    "No positioning brief available yet."
+    asString(
+      asRecord(asRecord(state.insights?.bundle)?.structuredJob)?.jobTitle,
+    ) ||
+    asString(asRecord(state.jobProfile)?.jobTitle) ||
+    asString(asRecord(asRecord(state.insights?.rawResponse)?.structuredJob)?.jobTitle) ||
+    "this role"
   );
 }
 
-function extractEvidenceSummary(insights: WorkspaceInsights | null): string {
-  if (!insights) return "No evidence summary available yet.";
-
-  const directEvidence = [
-    insights.selectedEvidence,
-    asRecord(insights.bundle)?.selectedEvidence,
-  ];
-
-  for (const candidate of directEvidence) {
-    const arr = asStringArray(candidate);
-    if (arr.length > 0) {
-      return arr.map((item) => `• ${item}`).join("\n");
-    }
-  }
-
-  const selectedEvidenceRecord =
-    asRecord(insights.selectedEvidence) ??
-    asRecord(asRecord(insights.bundle)?.selectedEvidence);
-
-  if (selectedEvidenceRecord) {
-    const items = [
-      ...asStringArray(selectedEvidenceRecord.items),
-      ...asStringArray(selectedEvidenceRecord.evidence),
-      ...asStringArray(selectedEvidenceRecord.claims),
-    ];
-
-    if (items.length > 0) {
-      return items.map((item) => `• ${item}`).join("\n");
-    }
-  }
-
-  const strongMatches = insights.strongMatches ?? [];
-  if (strongMatches.length > 0) {
-    return strongMatches.map((item) => `• ${item}`).join("\n");
-  }
-
-  return "No evidence summary available yet.";
-}
-
-function extractRecommendation(insights: WorkspaceInsights | null): string {
-  if (!insights) return "No recommendation available yet.";
-
+function extractCompanyName(state: {
+  insights: WorkspaceInsights | null;
+  jobProfile: Record<string, unknown> | null;
+}): string {
   return (
-    insights.advisorMessage ||
-    insights.reasoningSummary ||
-    asString(insights.recommendation) ||
-    asString(asRecord(insights.recommendation)?.summary) ||
-    asString(asRecord(insights.recommendation)?.decision) ||
-    asString(asRecord(insights.recommendation)?.rationale) ||
-    "No recommendation available yet."
+    asString(
+      asRecord(asRecord(state.insights?.bundle)?.structuredJob)?.companyName,
+    ) ||
+    asString(asRecord(state.jobProfile)?.companyName) ||
+    ""
   );
 }
 
-function extractReviewFindings(finalDrafts: WorkspaceFinalDrafts | null): string {
-  if (!finalDrafts) return "No review findings available yet.";
+// ── Document block renderer ───────────────────────────────────────────────────
 
-  const findings =
-    finalDrafts.reviewFindings ??
-    asRecord(finalDrafts.rawResponse)?.reviewFindings ??
-    asRecord(finalDrafts.rawResponse)?.review ??
-    null;
-
-  if (!findings) return "No review findings available yet.";
-
-  if (typeof findings === "string") return findings;
-
-  if (Array.isArray(findings)) {
-    return findings.map((item) => `• ${String(item)}`).join("\n");
-  }
-
-  return stringifyUnknown(findings);
-}
-
-function extractProfileDiscoverySignals(
-  insights: WorkspaceInsights | null,
-): string {
-  if (!insights) return "No profile discovery signals available yet.";
-
-  const candidates: string[][] = [
-  insights?.missingSignals,
-  insights?.riskAreas,
-  insights?.blockers,
-  asStringArray(asRecord(insights?.recommendation)?.risks),
-  asStringArray(asRecord(insights?.positioningBrief)?.positioningRisks),
-].filter((candidate): candidate is string[] => Array.isArray(candidate));
-
-for (const candidate of candidates) {
-  if (candidate.length > 0) {
-    return candidate.map((item) => `• ${item}`).join("\n");
-  }
-}
-
-  return "No profile discovery signals available yet.";
-}
-
-function extractRefinementNotes(
-  insights: WorkspaceInsights | null,
-  finalDrafts: WorkspaceFinalDrafts | null,
-): string {
-  const parts: string[] = [];
-
-  if (insights?.riskAreas?.length) {
-    parts.push("Risk areas:");
-    parts.push(...insights.riskAreas.map((item) => `• ${item}`));
-  }
-
-  if (insights?.blockers?.length) {
-    if (parts.length > 0) parts.push("");
-    parts.push("Blockers:");
-    parts.push(...insights.blockers.map((item) => `• ${item}`));
-  }
-
-  if (finalDrafts?.warnings?.length) {
-    if (parts.length > 0) parts.push("");
-    parts.push("Warnings:");
-    parts.push(...finalDrafts.warnings.map((item) => `• ${item}`));
-  }
-
-  const rawWarnings = asRecord(finalDrafts?.rawResponse)?.warnings;
-  if (
-    !finalDrafts?.warnings?.length &&
-    Array.isArray(rawWarnings) &&
-    rawWarnings.length > 0
-  ) {
-    if (parts.length > 0) parts.push("");
-    parts.push("Warnings:");
-    parts.push(...rawWarnings.map((item) => `• ${String(item)}`));
-  }
-
-  return parts.length > 0 ? parts.join("\n") : "No refinement notes yet.";
-}
-
-function OutputBlock({
-  title,
-  subtitle,
-  children,
-  defaultOpen = false,
-}: {
-  title: string;
-  subtitle?: string;
-  children: ReactNode;
-  defaultOpen?: boolean;
-}) {
+function DocumentText({ text }: { text: string }) {
   return (
-    <details
-      open={defaultOpen}
-      className="rounded-2xl border border-slate-200 bg-white"
-    >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4">
-        <div>
-          <div className="text-base font-semibold text-slate-900">{title}</div>
-          {subtitle ? (
-            <div className="mt-1 text-sm text-slate-500">{subtitle}</div>
-          ) : null}
-        </div>
-        <div className="text-sm text-slate-400">Open</div>
-      </summary>
-      <div className="border-t border-slate-100 px-5 py-5">{children}</div>
-    </details>
+    <div style={docTextStyle}>
+      {text.split("\n\n").map((block, i) => (
+        <p key={i} style={docParaStyle}>
+          {block.split("\n").map((line, j, arr) => (
+            <span key={j}>
+              {line}
+              {j < arr.length - 1 && <br />}
+            </span>
+          ))}
+        </p>
+      ))}
+    </div>
   );
 }
 
-function SummaryPill({ label }: { label: string }) {
-  return <span style={pillStyle}>{label}</span>;
-}
+// ── Tab type ──────────────────────────────────────────────────────────────────
+
+type DocTab = "cv" | "coverletter";
+
+// ── Main component ────────────────────────────────────────────────────────────
 
 export default function WorkspaceFinalPage() {
   const { state, progress } = useWorkspace();
@@ -270,307 +115,558 @@ export default function WorkspaceFinalPage() {
   const finalCv = extractFinalCv(finalDrafts);
   const finalCoverLetter = extractFinalCoverLetter(finalDrafts);
 
-  const outputLanguage = formatOutputLanguage(
-    finalDrafts?.outputLanguage || state.jobProfile?.outputLanguage,
-  );
-  const runId = finalDrafts?.runId || state.telemetry?.runId || "";
+  const jobTitle = extractJobTitle({
+    insights: state.insights,
+    jobProfile: state.jobProfile as Record<string, unknown> | null,
+  });
+  const companyName = extractCompanyName({
+    insights: state.insights,
+    jobProfile: state.jobProfile as Record<string, unknown> | null,
+  });
 
-  const positioningBrief = extractPositioningBrief(state.insights);
-  const evidenceSummary = extractEvidenceSummary(state.insights);
-  const recommendation = extractRecommendation(state.insights);
-  const reviewFindings = extractReviewFindings(finalDrafts);
-  const profileDiscoverySignals = extractProfileDiscoverySignals(state.insights);
-  const refinementNotes = extractRefinementNotes(state.insights, finalDrafts);
+  const runId = finalDrafts?.runId || state.telemetry?.runId || "";
+  const outputLanguage = finalDrafts?.outputLanguage || state.jobProfile?.outputLanguage || "en";
 
   const hasFinalDrafts = Boolean(finalDrafts);
+  const hasCv = Boolean(finalCv);
+  const hasCoverLetter = Boolean(finalCoverLetter);
   const isReadyForGeneration = progress.profileReady && progress.jobReady;
+
+  const [activeTab, setActiveTab] = useState<DocTab>("cv");
+  const [hasReviewed, setHasReviewed] = useState(false);
+  const [sendClicked, setSendClicked] = useState(false);
+  const [copyingCv, setCopyingCv] = useState(false);
+  const [copyingCl, setCopyingCl] = useState(false);
+
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  // Reset review confirmation if documents change
+  useEffect(() => {
+    setHasReviewed(false);
+    setSendClicked(false);
+  }, [finalDrafts]);
+
+  async function handleCopy(text: string, which: "cv" | "cl") {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (which === "cv") {
+        setCopyingCv(true);
+        copyTimerRef.current = setTimeout(() => setCopyingCv(false), 1800);
+      } else {
+        setCopyingCl(true);
+        copyTimerRef.current = setTimeout(() => setCopyingCl(false), 1800);
+      }
+    } catch {
+      // ignore clipboard errors
+    }
+  }
+
+  function handlePrint() {
+    window.print();
+  }
+
+  function handleDownload(text: string, filename: string) {
+    const blob = new Blob([text], { type: "text/plain; charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleOpenInEmail() {
+    const subject = encodeURIComponent(
+      companyName
+        ? `Application — ${jobTitle} — ${companyName}`
+        : `Application — ${jobTitle}`,
+    );
+    const body = encodeURIComponent(
+      [
+        "Please find my CV and cover letter attached.",
+        "",
+        "---",
+        "Cover letter:",
+        finalCoverLetter,
+        "",
+        "---",
+        "CV:",
+        finalCv,
+      ].join("\n"),
+    );
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  }
+
+  function handleSend() {
+    if (!hasReviewed) return;
+    setSendClicked(true);
+    handleOpenInEmail();
+  }
+
+  const roleLabel = companyName
+    ? `${jobTitle} — ${companyName}`
+    : jobTitle;
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
+      {/* Header */}
       <AppCard className="p-6">
         <SectionLabel tone="blue">Final</SectionLabel>
 
-        <h1
-          style={{
-            margin: "14px 0 0",
-            fontSize: 32,
-            lineHeight: 1.15,
-            letterSpacing: "-0.03em",
-            color: t.colors.textPrimary,
-          }}
-        >
-          Final application documents
+        <h1 style={headingStyle}>
+          {hasFinalDrafts
+            ? "Your documents are ready."
+            : "Waiting for your documents."}
         </h1>
 
-        <p
-          style={{
-            margin: "12px 0 0",
-            maxWidth: 920,
-            fontSize: 15,
-            lineHeight: 1.7,
-            color: t.colors.textSecondary,
-          }}
-        >
-          This page shows the generated CV and cover letter, together with the
-          reasoning that shaped them.
-        </p>
+        {hasFinalDrafts && (
+          <p style={subheadStyle}>
+            {roleLabel !== "this role"
+              ? `Tailored for: ${roleLabel}`
+              : "Review your CV and cover letter, then send when you are ready."}
+          </p>
+        )}
 
-        <div
-          style={{
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginTop: 16,
-          }}
-        >
-          <SummaryPill label={`Output: ${outputLanguage}`} />
-          <SummaryPill
-            label={`Status: ${
-              hasFinalDrafts
-                ? "Ready"
-                : state.finalStatus === "loading"
-                  ? "Generating"
-                  : "Pending"
-            }`}
-          />
-          {runId ? <SummaryPill label={`Run ID: ${runId}`} /> : null}
-        </div>
+        {!hasFinalDrafts && (
+          <p style={subheadStyle}>
+            {isReadyForGeneration
+              ? "Run the pipeline from the Job step to generate your tailored documents."
+              : "Complete your profile and add a job description to generate your documents."}
+          </p>
+        )}
 
-        {state.finalError ? (
-          <div style={errorBannerStyle}>{state.finalError}</div>
-        ) : null}
-
-        {hasFinalDrafts ? (
+        {hasFinalDrafts && runId && (
           <div style={{ marginTop: 16 }}>
             <FeedbackStars
               runId={runId}
               stage="final_documents"
-              prompt={
-                outputLanguage === "German"
-                  ? "Diesen Schritt bewerten"
-                  : "Rate this step"
-              }
-              locale={outputLanguage === "German" ? "de" : "en"}
+              prompt={outputLanguage === "de" ? "Diesen Schritt bewerten" : "Rate this step"}
+              locale={outputLanguage === "de" ? "de" : "en"}
             />
           </div>
-        ) : null}
+        )}
       </AppCard>
 
-      {!hasFinalDrafts ? (
+      {/* Empty state */}
+      {!hasFinalDrafts && (
         <AppCard className="p-6">
           <div style={emptyStateStyle}>
             {!isReadyForGeneration
-              ? "No generated documents yet. Complete the Profile and Job steps first so the final output can be created."
-              : "No generated documents yet. Return to the Job step and run the pipeline so the final output is generated into workspace state."}
+              ? "Complete the Profile and Job steps first."
+              : "Return to the Job step and run the pipeline to generate your documents."}
           </div>
-
-          <div
-            style={{
-              marginTop: 16,
-              display: "flex",
-              gap: 10,
-              flexWrap: "wrap",
-            }}
-          >
-            <Link href="/workspace/profile" style={secondaryLinkStyle}>
-              Open Profile
-            </Link>
+          <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {!progress.profileReady && (
+              <Link href="/workspace/profile" style={primaryLinkStyle}>
+                Open Profile
+              </Link>
+            )}
             <Link href="/workspace/job" style={primaryLinkStyle}>
-              Return to Job
+              {progress.jobReady ? "Return to Job" : "Add a job"}
             </Link>
-            <Link href="/workspace/insights" style={secondaryLinkStyle}>
-              Open Insights
-            </Link>
-          </div>
-        </AppCard>
-      ) : (
-        <>
-          <OutputBlock
-            title="Final CV"
-            subtitle="Primary CV output for the analysed role."
-            defaultOpen
-          >
-            <div style={headerRowStyle}>
-              <div style={smallMutedStyle}>
-                Generated and stored in workspace state.
-              </div>
-              <button
-                type="button"
-                onClick={() => void copy(finalCv)}
-                style={secondaryButtonStyle}
-              >
-                Copy CV
-              </button>
-            </div>
-            <pre style={preStyle}>{finalCv}</pre>
-          </OutputBlock>
-
-          <OutputBlock
-            title="Final Cover Letter"
-            subtitle="Primary cover letter output for the analysed role."
-            defaultOpen
-          >
-            <div style={headerRowStyle}>
-              <div style={smallMutedStyle}>
-                Generated and stored in workspace state.
-              </div>
-              <button
-                type="button"
-                onClick={() => void copy(finalCoverLetter)}
-                style={secondaryButtonStyle}
-              >
-                Copy cover letter
-              </button>
-            </div>
-            <pre style={preStyle}>{finalCoverLetter}</pre>
-          </OutputBlock>
-
-          <OutputBlock
-            title="Refinement Notes"
-            subtitle="What could still strengthen the application before sending."
-            defaultOpen
-          >
-            <pre style={preStyle}>{refinementNotes}</pre>
-
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                flexWrap: "wrap",
-                marginTop: 16,
-              }}
-            >
-              <Link href="/workspace/profile" style={secondaryLinkStyle}>
-                Update profile
-              </Link>
-              <Link href="/workspace/job" style={primaryLinkStyle}>
-                Regenerate from Job
-              </Link>
+            {progress.insightsReady && (
               <Link href="/workspace/insights" style={secondaryLinkStyle}>
                 Open Insights
               </Link>
-            </div>
-          </OutputBlock>
+            )}
+          </div>
+        </AppCard>
+      )}
 
-          <OutputBlock
-            title="Positioning Brief"
-            subtitle="How the system is positioning the candidate for this role."
-          >
-            <pre style={preStyle}>{positioningBrief}</pre>
-          </OutputBlock>
-
-          <OutputBlock
-            title="Evidence Summary"
-            subtitle="What the current positioning is based on."
-          >
-            <pre style={preStyle}>{evidenceSummary}</pre>
-          </OutputBlock>
-
-          <OutputBlock
-            title="Recommendation"
-            subtitle="Current role recommendation from the pipeline."
-          >
-            <pre style={preStyle}>{recommendation}</pre>
-          </OutputBlock>
-
-          <OutputBlock
-            title="Review Findings"
-            subtitle="System review observations and conservative adjustments."
-          >
-            <pre style={preStyle}>{reviewFindings}</pre>
-          </OutputBlock>
-
-          <OutputBlock
-            title="Profile Discovery Signals"
-            subtitle="Gaps or missing signals that may improve the next regeneration."
-          >
-            <pre style={preStyle}>{profileDiscoverySignals}</pre>
-
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                flexWrap: "wrap",
-                marginTop: 16,
-              }}
+      {/* Document tabs + actions */}
+      {hasFinalDrafts && (
+        <>
+          {/* Tab bar */}
+          <div style={tabBarStyle}>
+            <button
+              type="button"
+              onClick={() => setActiveTab("cv")}
+              style={activeTab === "cv" ? activeTabStyle : inactiveTabStyle}
             >
-              <Link href="/workspace/profile" style={primaryLinkStyle}>
-                Add evidence in Profile
-              </Link>
-              <Link href="/workspace/job" style={secondaryLinkStyle}>
-                Return to Job
-              </Link>
+              CV
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("coverletter")}
+              style={
+                activeTab === "coverletter" ? activeTabStyle : inactiveTabStyle
+              }
+            >
+              Cover Letter
+            </button>
+          </div>
+
+          {/* Document display */}
+          <AppCard className="p-6">
+            {activeTab === "cv" && (
+              <>
+                <div style={docHeaderStyle}>
+                  <span style={docLabelStyle}>CV</span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopy(finalCv, "cv")}
+                      style={ghostButtonStyle}
+                    >
+                      {copyingCv ? "Copied" : "Copy"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDownload(
+                          finalCv,
+                          `CV_${jobTitle.replace(/\s+/g, "_")}.txt`,
+                        )
+                      }
+                      style={ghostButtonStyle}
+                    >
+                      Download
+                    </button>
+                  </div>
+                </div>
+                {hasCv ? (
+                  <DocumentText text={finalCv} />
+                ) : (
+                  <div style={missingDocStyle}>
+                    CV not available. Return to the Job step and regenerate.
+                  </div>
+                )}
+              </>
+            )}
+
+            {activeTab === "coverletter" && (
+              <>
+                <div style={docHeaderStyle}>
+                  <span style={docLabelStyle}>Cover Letter</span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopy(finalCoverLetter, "cl")}
+                      style={ghostButtonStyle}
+                    >
+                      {copyingCl ? "Copied" : "Copy"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDownload(
+                          finalCoverLetter,
+                          `CoverLetter_${jobTitle.replace(/\s+/g, "_")}.txt`,
+                        )
+                      }
+                      style={ghostButtonStyle}
+                    >
+                      Download
+                    </button>
+                  </div>
+                </div>
+                {hasCoverLetter ? (
+                  <DocumentText text={finalCoverLetter} />
+                ) : (
+                  <div style={missingDocStyle}>
+                    Cover letter not available. Return to the Job step and
+                    regenerate.
+                  </div>
+                )}
+              </>
+            )}
+          </AppCard>
+
+          {/* Action bar */}
+          <AppCard className="p-6">
+            <div style={actionBarStyle}>
+              {/* Left: utility actions */}
+              <div style={actionGroupStyle}>
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  style={secondaryActionStyle}
+                >
+                  Print
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleDownload(
+                      [finalCv, finalCoverLetter].filter(Boolean).join("\n\n---\n\n"),
+                      `Application_${jobTitle.replace(/\s+/g, "_")}.txt`,
+                    )
+                  }
+                  style={secondaryActionStyle}
+                >
+                  Download all
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenInEmail}
+                  style={secondaryActionStyle}
+                >
+                  Open in email
+                </button>
+              </div>
+
+              {/* Right: confirm + send */}
+              <div style={actionGroupStyle}>
+                <label style={reviewToggleStyle}>
+                  <input
+                    type="checkbox"
+                    checked={hasReviewed}
+                    onChange={(e) => {
+                      setHasReviewed(e.target.checked);
+                      if (!e.target.checked) setSendClicked(false);
+                    }}
+                    style={{ width: 16, height: 16, cursor: "pointer" }}
+                  />
+                  <span style={{ color: t.colors.textSecondary, fontSize: 14 }}>
+                    I have reviewed my documents
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleSend}
+                  disabled={!hasReviewed}
+                  style={hasReviewed ? sendActiveStyle : sendDisabledStyle}
+                >
+                  {sendClicked ? "Opening email…" : "Send application"}
+                </button>
+              </div>
             </div>
-          </OutputBlock>
+
+            {!hasReviewed && (
+              <p style={reviewHintStyle}>
+                Review your documents above, then check the box to activate
+                Send.
+              </p>
+            )}
+          </AppCard>
+
+          {/* Warnings */}
+          {(finalDrafts?.warnings ?? []).length > 0 && (
+            <AppCard className="p-6">
+              <div style={warningsSectionStyle}>
+                <div style={warnLabelStyle}>Things to be aware of</div>
+                <ul style={{ margin: 0, paddingLeft: 20 }}>
+                  {asStringArray(finalDrafts?.warnings).map((w, i) => (
+                    <li key={i} style={warnItemStyle}>
+                      {w}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </AppCard>
+          )}
+
+          {/* Navigation */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Link href="/workspace/insights" style={secondaryLinkStyle}>
+              Back to Insights
+            </Link>
+          </div>
         </>
       )}
     </div>
   );
 }
 
-const pillStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  padding: "8px 12px",
-  borderRadius: 999,
-  border: `1px solid ${t.colors.border}`,
-  background: t.colors.surface,
-  color: t.colors.textSecondary,
-  fontSize: 12,
-  fontWeight: 700,
-};
+// ── Styles ────────────────────────────────────────────────────────────────────
 
-const headerRowStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-  flexWrap: "wrap",
-};
-
-const smallMutedStyle: CSSProperties = {
-  fontSize: 12,
-  color: t.colors.textMuted,
-};
-
-const secondaryButtonStyle: CSSProperties = {
-  border: `1px solid ${t.colors.border}`,
-  borderRadius: t.radius.sm,
-  background: t.colors.surface,
+const headingStyle: CSSProperties = {
+  margin: "14px 0 0",
+  fontSize: 28,
+  lineHeight: 1.2,
+  letterSpacing: "-0.025em",
   color: t.colors.textPrimary,
-  fontSize: 13,
   fontWeight: 700,
-  padding: "8px 12px",
-  cursor: "pointer",
 };
 
-const preStyle: CSSProperties = {
-  marginTop: 16,
-  whiteSpace: "pre-wrap",
-  fontSize: 14,
-  lineHeight: 1.7,
+const subheadStyle: CSSProperties = {
+  margin: "10px 0 0",
+  fontSize: 15,
+  lineHeight: 1.65,
   color: t.colors.textSecondary,
+  maxWidth: 680,
 };
 
 const emptyStateStyle: CSSProperties = {
   borderRadius: t.radius.md,
   border: `1px solid ${t.colors.border}`,
   background: t.colors.backgroundSoft,
-  padding: 16,
+  padding: "14px 16px",
   fontSize: 14,
   lineHeight: 1.7,
   color: t.colors.textSecondary,
 };
 
-const errorBannerStyle: CSSProperties = {
-  marginTop: 16,
+const tabBarStyle: CSSProperties = {
+  display: "flex",
+  gap: 4,
+};
+
+const baseTabStyle: CSSProperties = {
+  border: "none",
+  cursor: "pointer",
+  fontSize: 14,
+  fontWeight: 700,
+  padding: "10px 20px",
+  borderRadius: t.radius.sm,
+  transition: "background 0.12s",
+};
+
+const activeTabStyle: CSSProperties = {
+  ...baseTabStyle,
+  background: t.colors.primary,
+  color: t.colors.textOnPrimary,
+};
+
+const inactiveTabStyle: CSSProperties = {
+  ...baseTabStyle,
+  background: t.colors.backgroundSoft,
+  color: t.colors.textSecondary,
+};
+
+const docHeaderStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginBottom: 16,
+};
+
+const docLabelStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: t.colors.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+};
+
+// Document-style area mimicking a printed page
+const docTextStyle: CSSProperties = {
+  padding: "28px 32px",
+  background: "#FFFFFF",
+  border: `1px solid ${t.colors.border}`,
+  borderRadius: t.radius.md,
+  boxShadow: t.shadow.sm,
+  maxWidth: 760,
+};
+
+const docParaStyle: CSSProperties = {
+  margin: "0 0 14px 0",
+  fontSize: 14,
+  lineHeight: 1.75,
+  color: t.colors.textPrimary,
+  textAlign: "justify",
+  fontFamily: "Georgia, 'Times New Roman', serif",
+};
+
+const missingDocStyle: CSSProperties = {
+  padding: "20px 0",
+  fontSize: 14,
+  color: t.colors.textMuted,
+};
+
+const ghostButtonStyle: CSSProperties = {
+  border: `1px solid ${t.colors.border}`,
+  borderRadius: t.radius.sm,
+  background: t.colors.surface,
+  color: t.colors.textSecondary,
+  fontSize: 13,
+  fontWeight: 600,
+  padding: "6px 12px",
+  cursor: "pointer",
+};
+
+// Action bar
+const actionBarStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 16,
+  flexWrap: "wrap",
+};
+
+const actionGroupStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const secondaryActionStyle: CSSProperties = {
+  border: `1px solid ${t.colors.border}`,
+  borderRadius: t.radius.sm,
+  background: t.colors.surface,
+  color: t.colors.textPrimary,
+  fontSize: 14,
+  fontWeight: 600,
+  padding: "10px 16px",
+  cursor: "pointer",
+};
+
+const reviewToggleStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  cursor: "pointer",
+  userSelect: "none",
+};
+
+const baseSendStyle: CSSProperties = {
+  borderRadius: t.radius.sm,
+  border: "none",
+  fontSize: 14,
+  fontWeight: 700,
+  padding: "10px 22px",
+};
+
+const sendActiveStyle: CSSProperties = {
+  ...baseSendStyle,
+  background: t.colors.primary,
+  color: t.colors.textOnPrimary,
+  cursor: "pointer",
+};
+
+const sendDisabledStyle: CSSProperties = {
+  ...baseSendStyle,
+  background: t.colors.backgroundSoft,
+  color: t.colors.textMuted,
+  cursor: "not-allowed",
+};
+
+const reviewHintStyle: CSSProperties = {
+  marginTop: 14,
+  fontSize: 13,
+  color: t.colors.textMuted,
+  lineHeight: 1.6,
+};
+
+const warningsSectionStyle: CSSProperties = {
   borderRadius: t.radius.md,
   border: `1px solid ${t.colors.border}`,
   background: t.colors.backgroundSoft,
-  padding: 14,
+  padding: "14px 16px",
+};
+
+const warnLabelStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: t.colors.textSecondary,
+  marginBottom: 8,
+};
+
+const warnItemStyle: CSSProperties = {
   fontSize: 14,
-  lineHeight: 1.6,
-  color: t.colors.textPrimary,
+  lineHeight: 1.65,
+  color: t.colors.textSecondary,
+  marginBottom: 6,
 };
 
 const primaryLinkStyle: CSSProperties = {
@@ -582,7 +678,7 @@ const primaryLinkStyle: CSSProperties = {
   color: t.colors.textOnPrimary,
   fontSize: 14,
   fontWeight: 700,
-  padding: "10px 14px",
+  padding: "10px 16px",
   textDecoration: "none",
 };
 
@@ -596,6 +692,6 @@ const secondaryLinkStyle: CSSProperties = {
   color: t.colors.textPrimary,
   fontSize: 14,
   fontWeight: 700,
-  padding: "10px 14px",
+  padding: "10px 16px",
   textDecoration: "none",
 };

@@ -12,7 +12,6 @@ function validatePassword(password: string): string | null {
   if (password.length < 8) {
     return "Password must be at least 8 characters long.";
   }
-
   return null;
 }
 
@@ -25,10 +24,18 @@ export default function SignupPage(): React.JSX.Element {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [agreed, setAgreed] = useState(false);
+
+  // Granular consent state
+  const [consentTerms, setConsentTerms] = useState(false);
+  const [consentPrivacy, setConsentPrivacy] = useState(false);
+  const [consentStorage, setConsentStorage] = useState(false);
+  const [consentImprovement, setConsentImprovement] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const requiredConsentsGiven = consentTerms && consentPrivacy && consentStorage;
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
@@ -53,8 +60,8 @@ export default function SignupPage(): React.JSX.Element {
       return;
     }
 
-    if (!agreed) {
-      setError("You must agree to the policies before creating an account.");
+    if (!requiredConsentsGiven) {
+      setError("Please confirm the required checkboxes before continuing.");
       return;
     }
 
@@ -64,6 +71,15 @@ export default function SignupPage(): React.JSX.Element {
       const { data, error } = await supabase.auth.signUp({
         email: normalizedEmail,
         password,
+        options: {
+          data: {
+            consent_terms: consentTerms,
+            consent_privacy: consentPrivacy,
+            consent_storage: consentStorage,
+            consent_improvement: consentImprovement,
+            consent_recorded_at: new Date().toISOString(),
+          },
+        },
       });
 
       if (error) {
@@ -214,18 +230,79 @@ export default function SignupPage(): React.JSX.Element {
               </button>
             </div>
 
-            <div style={{ marginTop: 8 }}>
-              <label style={{ fontSize: 14, color: t.colors.textPrimary, lineHeight: 1.6 }}>
-                <input
-                  type="checkbox"
-                  checked={agreed}
-                  onChange={(e) => setAgreed(e.target.checked)}
-                  style={{ marginRight: 8 }}
-                />
-                I agree to the <Link href="/terms">Terms</Link>,{" "}
-                <Link href="/privacy">Privacy Policy</Link>, and{" "}
-                <Link href="/cookies">Cookie Policy</Link>.
-              </label>
+            {/* Granular consent checkboxes */}
+            <div
+              style={{
+                display: "grid",
+                gap: 12,
+                marginTop: 8,
+                padding: "16px 20px",
+                background: t.colors.backgroundSoft,
+                borderRadius: t.radius.md,
+                border: `1px solid ${t.colors.border}`,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: t.colors.textMuted,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  marginBottom: 2,
+                }}
+              >
+                Your choices
+              </div>
+
+              <ConsentCheckbox
+                id="consent-terms"
+                checked={consentTerms}
+                onChange={setConsentTerms}
+                required
+              >
+                I agree to the{" "}
+                <Link href="/terms" target="_blank" style={linkStyle}>
+                  Terms of Service
+                </Link>{" "}
+                <RequiredBadge />
+              </ConsentCheckbox>
+
+              <ConsentCheckbox
+                id="consent-privacy"
+                checked={consentPrivacy}
+                onChange={setConsentPrivacy}
+                required
+              >
+                I agree to the{" "}
+                <Link href="/privacy" target="_blank" style={linkStyle}>
+                  Privacy Policy
+                </Link>{" "}
+                <RequiredBadge />
+              </ConsentCheckbox>
+
+              <ConsentCheckbox
+                id="consent-storage"
+                checked={consentStorage}
+                onChange={setConsentStorage}
+                required
+              >
+                I consent to my profile and application data being stored and
+                used to generate tailored documents{" "}
+                <RequiredBadge />
+              </ConsentCheckbox>
+
+              <ConsentCheckbox
+                id="consent-improvement"
+                checked={consentImprovement}
+                onChange={setConsentImprovement}
+              >
+                I&apos;m happy for anonymised data to be used to improve the
+                system{" "}
+                <span style={{ fontSize: 11, color: t.colors.textMuted }}>
+                  (optional)
+                </span>
+              </ConsentCheckbox>
             </div>
 
             {error ? (
@@ -260,18 +337,24 @@ export default function SignupPage(): React.JSX.Element {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !requiredConsentsGiven}
               style={{
                 width: "100%",
                 height: 48,
                 borderRadius: t.radius.sm,
-                background: t.colors.primary,
-                color: t.colors.textOnPrimary,
+                background:
+                  loading || !requiredConsentsGiven
+                    ? t.colors.backgroundSoft
+                    : t.colors.primary,
+                color:
+                  loading || !requiredConsentsGiven
+                    ? t.colors.textMuted
+                    : t.colors.textOnPrimary,
                 border: "none",
                 fontWeight: 700,
                 fontSize: 15,
-                cursor: loading ? "not-allowed" : "pointer",
-                opacity: loading ? 0.75 : 1,
+                cursor:
+                  loading || !requiredConsentsGiven ? "not-allowed" : "pointer",
               }}
             >
               {loading ? "Creating account..." : "Create account"}
@@ -291,6 +374,59 @@ export default function SignupPage(): React.JSX.Element {
         </div>
       </div>
     </main>
+  );
+}
+
+function RequiredBadge() {
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        color: t.colors.textMuted,
+        fontWeight: 600,
+      }}
+    >
+      (required)
+    </span>
+  );
+}
+
+function ConsentCheckbox({
+  id,
+  checked,
+  onChange,
+  required = false,
+  children,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <label
+      htmlFor={id}
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        fontSize: 13,
+        lineHeight: 1.6,
+        color: t.colors.textPrimary,
+        cursor: "pointer",
+      }}
+    >
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        required={required}
+        style={{ marginTop: 3, flexShrink: 0 }}
+      />
+      <span>{children}</span>
+    </label>
   );
 }
 
@@ -327,4 +463,9 @@ const helperTextStyle: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.5,
   color: designTokens.colors.textSecondary,
+};
+
+const linkStyle: React.CSSProperties = {
+  color: designTokens.colors.primary,
+  textDecoration: "underline",
 };

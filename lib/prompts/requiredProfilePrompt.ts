@@ -1,10 +1,8 @@
 export function buildRequiredProfileInstructions(
-  locale: "en" | "de"
+  locale: string
 ): string {
-  const languageHint =
-    locale === "de"
-      ? "Write summaries and interpretations in German unless the evidence clearly supports English."
-      : "Write summaries and interpretations in English unless the evidence clearly supports German.";
+  const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
+  const languageHint = `Write summaries and interpretations in ${languageName}.`;
 
   return `
 You are the Required Profile Intelligence layer inside an AI job application system.

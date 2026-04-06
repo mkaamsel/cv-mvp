@@ -1,0 +1,16 @@
+import type { MatchResult } from "../types";
+
+export function runCode4(cvId: string, jdId: string): MatchResult {
+  return {
+    cvId,
+    jdId,
+    code: "4",
+    verdict: "partial_fit",
+    summary: "Code 4 stricter possession logic.",
+    taskMatchScore: 50,
+    capabilityMatchScore: 50,
+    possessionMatchScore: 50,
+    hardGateFailed: false,
+    decisionFactors: [],
+  };
+}

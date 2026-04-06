@@ -26,7 +26,7 @@ export default function CVListPage() {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      setMessage("You must be logged in.");
+      setMessage("Please sign in to access your CVs.");
       return;
     }
 
@@ -37,7 +37,7 @@ export default function CVListPage() {
       .order("created_at", { ascending: false });
 
     if (error) {
-      setMessage("Failed to load CVs.");
+      setMessage("We couldn't load your CVs. Please try refreshing.");
       return;
     }
 
@@ -67,7 +67,7 @@ export default function CVListPage() {
     if (error) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "Failed to save changes.",
+        [id]: "We couldn't save that change. Please try again.",
       }));
       setSavingId(null);
       return;
@@ -91,7 +91,7 @@ export default function CVListPage() {
     if (!user) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "You must be logged in.",
+        [id]: "Please sign in to continue.",
       }));
       setCreatingVersionId(null);
       return;
@@ -107,7 +107,7 @@ export default function CVListPage() {
     if (error) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "Failed to create new version.",
+        [id]: "We couldn't create a new version. Please try again.",
       }));
       setCreatingVersionId(null);
       return;
@@ -133,7 +133,7 @@ export default function CVListPage() {
     if (error) {
       setItemMessage((prev) => ({
         ...prev,
-        [id]: "Failed to delete CV.",
+        [id]: "We couldn't delete that CV. Please try again.",
       }));
       setDeletingId(null);
       return;

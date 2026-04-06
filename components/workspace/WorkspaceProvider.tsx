@@ -410,7 +410,7 @@ function mergeLoadedWorkspace(
     profileStatus:
       shouldUseLoadedProfile || current.candidateProfile
         ? "ready"
-        : current.profileStatus,
+        : "idle",
     profileError: null,
   };
 }

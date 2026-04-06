@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# prompt optimisation — candidate documents and generated prompts never enter version control
+/test-data/profile-inputs/*.txt
+/test-data/prompt-tournament/*.txt
+
+# optimisation registry is local state — not shared via git
+/lib/optimisation/tournament/registry.json
