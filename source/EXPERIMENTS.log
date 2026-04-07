@@ -1,0 +1,189 @@
+# Experiments Log
+AI Job Application Assistant — CV-MVP
+Format: each experiment is self-contained with status, purpose, logic, risk, and rollback.
+
+---
+
+## Legend
+
+Status values:
+- ACTIVE    — currently running in the codebase
+- REVERTED  — rolled back after testing
+- PROMOTED  — confirmed working, promoted to permanent behaviour
+- PAUSED    — disabled via engine switch or comment, pending decision
+
+---
+
+## Session: 2026-04-07
+
+Restore point before experiments: git commit `991e8c8`
+Experiment commit: git commit `2c5fa73`
+Full rollback: `git reset --hard 991e8c8`
+
+---
+
+### EXP-01 — Importance-aware missingSignals
+
+**Status:** ACTIVE
+**Date:** 2026-04-07
+**File:** `lib/orchestration/tailoring/runTailoringPipeline.ts`
+**Functions touched:**
+- `RequiredProfile` type
+- `deriveRequiredProfile()` (rule track)
+- `mapAiRequiredProfileToInternal()` (AI track)
+- `buildMissingSignals()`
+
+**Problem it solves:**
+`requirementSignals` mixed core, supporting, and preferred requirements with no distinction.
+A missing "preferred" tool counted equally to a missing "core" qualification in `missingCount`,
+causing recommendation labels to be more conservative than the evidence warranted.
+
+**Logic change:**
+Added `coreRequirementSignals: string[]` field to `RequiredProfile` type.
+- AI track: populated from `importance === "core"` competencies + education requirements
+- Rule track: falls back to qualification signals as a proxy for core
+- `buildMissingSignals` now checks `coreRequirementSignals` first; falls back to
+  `requirementSignals` only if the core list is empty
+
+**Expected impact:**
+`missingCount` decreases for near-fit candidates who cover core requirements but lack
+preferred tools. Recommendation label improvement for genuine near-fit applications.
+
+**Risk:** Low. Additive field with fallback to prior behaviour if core list is empty.
+
+**Rollback (independent):**
+1. Remove `coreRequirementSignals` from `RequiredProfile` type definition
+2. Remove `coreRequirementSignals` population block in `mapAiRequiredProfileToInternal`
+3. Remove `coreRequirementSignals` from rule-track `deriveRequiredProfile` return object
+4. Remove `coreRequirementSignals` from initial `requiredProfile` object in main pipeline
+5. Revert `buildMissingSignals` to use `requiredProfile.requirementSignals` directly
+
+---
+
+### EXP-02 — Reduced lexical fragility in buildMissingSignals
+
+**Status:** ACTIVE
+**Date:** 2026-04-07
+**File:** `lib/orchestration/tailoring/runTailoringPipeline.ts`
+**Functions touched:**
+- `buildMissingSignals()`
+
+**Problem it solves:**
+Token overlap threshold was `=== 0` — any single shared token (including common words
+like "experience", "knowledge", "work") falsely counted as the requirement being covered.
+Semantically close requirements with zero meaningful overlap could be missed entirely.
+
+**Logic change:**
+Filter condition changed from `scoreOverlap === 0` to `scoreOverlap < 2`.
+A requirement now needs at least 2 shared tokens to be considered covered.
+
+**Expected impact:**
+More requirements correctly flagged as missing when only superficial token overlap exists.
+May increase `missingCount` slightly — EXP-01 counterbalances by narrowing the signal set
+to core-only requirements.
+
+**Risk:** Low–medium. Could increase `missingCount` for candidates with thin profiles.
+Watch for over-flagging in runs. EXP-01 mitigates this by only checking core requirements.
+
+**Rollback (independent):**
+Change `scoreOverlap(haystack, requirement) < 2` back to `scoreOverlap(haystack, requirement) === 0`
+on the single filter line in `buildMissingSignals`.
+
+---
+
+### EXP-03 — Remove hardcoded finance fallback text from rule-track positioning
+
+**Status:** ACTIVE
+**Date:** 2026-04-07
+**File:** `lib/orchestration/tailoring/runTailoringPipeline.ts`
+**Functions touched:**
+- `buildPositioningBriefPack()`
+- `buildCvDraft()` (roleLabel fallback)
+
+**Problem it solves:**
+Rule-track positioning brief produced finance/accounting-specific wording for all roles:
+- headline fallback: `"Relevant finance background"`
+- positioningStrategy: `"Position through proven accounting execution, strong closing and reconciliation credibility..."`
+- coverLetterAngle: `"Emphasise credible accounting depth, international coordination..."`
+- roleLabel fallback: `"Finance / Accounting role"`
+
+These violated CLAUDE.md SYSTEM CONSTRAINT 1 (domain agnostic) and V2/V3 (hardcoded strings).
+Non-finance candidates received finance-specific framing in their rule-track positioning brief.
+
+**Logic change:**
+Four string replacements:
+- headline fallback: `""` (empty — omit if not in profile)
+- positioningStrategy (with gaps): `"Position through the strongest directly evidenced experience and acknowledge remaining gaps honestly and specifically."`
+- positioningStrategy (no gaps): `"Position through direct role alignment and the most relevant evidenced experience."`
+- coverLetterAngle: `"Emphasise the most directly supported experience and frame the application around the strongest evidence of role fit."`
+- roleLabel fallback: `"the target role"`
+
+**Expected impact:**
+Non-finance roles receive neutral cross-sector positioning language.
+Finance roles unaffected — AI track overrides rule brief for all active runs.
+
+**Risk:** Very low. Generic wording is always safer than wrong-domain wording.
+
+**Rollback (independent):**
+Restore the four string literals to their previous values (see git diff `991e8c8..2c5fa73`).
+
+---
+
+### EXP-04 — Rule-track missingSignals moderated by L7 weakEvidence
+
+**Status:** ACTIVE
+**Date:** 2026-04-07
+**File:** `lib/orchestration/tailoring/runTailoringPipeline.ts`
+**Functions touched:**
+- `missingSignals` derivation block in main pipeline (after L7)
+
+**Problem it solves:**
+The rule track (`buildMissingSignals`) and L7 AI track (`selectedEvidence.weakEvidence`)
+could produce contradictory gap assessments. When L7 AI found evidence for a requirement
+(and classified it as strongEvidence/supportEvidence), the rule track could still flag it
+as missing based on token matching. Both tracks fed into `missingSignals`, inflating
+`missingCount` and causing overly cautious recommendation labels.
+
+**Logic change:**
+After `buildMissingSignals` runs, if L7 AI is active and `weakEvidence` is non-empty:
+- Filter `rawMissing` to retain only items that L7 also flagged as weak/missing
+  (exact string match or `scoreOverlap >= 2` against any `weakEvidence` item)
+- Both tracks agreeing = confirmed real gap
+- Safety net: if reconciliation empties the list entirely, keep full `rawMissing`
+  (conservative fallback — never return fewer gaps than the safety net requires)
+- Emits a `Layer7C: missingSignals:reconciled` trace entry for observability
+
+**Expected impact:**
+Most direct fix for recommendation over-caution. Bridges that L7 correctly identified
+as covered are removed from `missingSignals`. `riskAreas` and `blockers` in the rule
+track should more accurately reflect genuine gaps.
+
+**Risk:** Medium. Depends on L7 AI quality. If L7 misses a real gap and classifies it as
+strongEvidence, EXP-04 will remove it from `missingSignals`. The safety net (empty → keep
+all rawMissing) reduces but does not eliminate this risk. Gate: only activates when
+`LAYER_7_SELECTED_EVIDENCE_AI` is true and `weakEvidence` is non-empty.
+
+**Rollback (independent):**
+Replace the entire `try` block in the `missingSignals` derivation with:
+```ts
+let missingSignals: string[] = [];
+try {
+  missingSignals = buildMissingSignals(candidateProfileView, requiredProfile);
+} catch (err) {
+  console.error("[runTailoringPipeline] missingSignals failed — continuing:", err);
+}
+```
+
+---
+
+## Rollback Quick Reference
+
+| Experiment | Rollback scope | Lines in `runTailoringPipeline.ts` to revert |
+|---|---|---|
+| EXP-01 | Type + 3 function blocks + 1 pipeline init | `RequiredProfile` type, `deriveRequiredProfile` return, `mapAiRequiredProfileToInternal` block, `requiredProfile` init, `buildMissingSignals` signal selection |
+| EXP-02 | 1 line | `scoreOverlap < 2` → `scoreOverlap === 0` |
+| EXP-03 | 4 string literals | `buildPositioningBriefPack` (3 strings) + `buildCvDraft` roleLabel |
+| EXP-04 | 1 try block | Replace reconciliation block with simple `buildMissingSignals` call |
+| All 4 | Full reset | `git reset --hard 991e8c8` |
+
+---
