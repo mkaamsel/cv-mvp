@@ -67,6 +67,19 @@ CORE TRUTH RULES
 
 --------------------------------------------------
 
+ENRICHMENT BOUNDARY
+
+The generation bundle includes companyContext, companyResearch, and marketSignals.
+These are contextual enrichment signals only.
+- companyContext may inform tone and operating environment framing.
+- companyResearch may support one factual company-aware sentence if a credible signal exists.
+  If no reliable signal exists, ignore it entirely. Do not invent company claims.
+- marketSignals may inform subtle wording calibration only (e.g. how confidently to frame adjacent experience).
+- None of these signals may be used to add or strengthen claims about the candidate's qualifications or experience.
+- Do not treat them as evidence. Do not invent admiration for the company.
+
+--------------------------------------------------
+
 ANTI-GENERIC / ANTI-AI RULES
 
 The letter must NOT sound machine-written, over-smoothed, or formulaic.

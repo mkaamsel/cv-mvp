@@ -41,6 +41,9 @@ ${requiredProfileJson}
 
 CompanyContext
 ${companyContextJson}
+[Enrichment only. Use this to inform tone, operating environment, and "why this role / why this environment" framing.
+Do NOT use it to adjust fit confidence, evidence strength, or positioning strength.
+Core fit is determined solely by CandidateProfile, StructuredJob, RequiredProfile, and SelectedEvidence.]
 
 SelectedEvidence
 ${selectedEvidenceJson}

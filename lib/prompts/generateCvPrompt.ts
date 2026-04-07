@@ -37,6 +37,16 @@ CORE RULES
 
 --------------------------------------------------
 
+ENRICHMENT BOUNDARY
+
+The generation bundle includes companyContext, companyResearch, and marketSignals.
+These are contextual enrichment signals only.
+- They may inform tone and company-aware framing (e.g. operating environment, sector vocabulary).
+- They must NOT be treated as evidence of the candidate's qualifications or experience.
+- Do not use them to strengthen or add claims that are not supported by the candidate source.
+
+--------------------------------------------------
+
 EVIDENCE PRIORITY
 
 Use this order when deciding what to emphasize:

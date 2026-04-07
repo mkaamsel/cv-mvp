@@ -67,6 +67,18 @@ function deriveStageStatuses(trace: string[]): Record<string, string> {
   return statuses;
 }
 
+// Derive true pipeline degradation events from the trace.
+// These are entries where a layer crashed (:error:caught) or the AI track
+// returned nothing and the rule fallback fired (:ai:fallback).
+// This replaces the previous misuse of result.insights.riskAreas (application
+// risk areas) which had nothing to do with pipeline health.
+function deriveDegradedEvents(trace: string[]): string[] {
+  return trace.filter(
+    (entry) =>
+      entry.includes(":error:caught") || entry.includes(":ai:fallback"),
+  );
+}
+
 export async function POST(req: NextRequest) {
   console.log("[/api/tailoring] POST received", { url: req.url, origin: req.nextUrl.origin });
   try {
@@ -106,7 +118,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if ((dailyRunCount ?? 0) >= 10) {
+    if (process.env.NODE_ENV !== "development" && (dailyRunCount ?? 0) >= 10) {
       return NextResponse.json(
         { ok: false, message: "You've used all your analysis runs for today. Your allowance resets at midnight — come back tomorrow and we'll keep going." },
         { status: 429 }
@@ -161,6 +173,7 @@ export async function POST(req: NextRequest) {
     try {
       const bundle = asRecord(result.insights.bundle);
       const stageStatuses = deriveStageStatuses(result.telemetry.pipelineTrace);
+      const degradedEvents = deriveDegradedEvents(result.telemetry.pipelineTrace);
 
       await supabaseAdmin.from("tailoring_runs").insert({
         user_id: user.id,
@@ -177,11 +190,14 @@ export async function POST(req: NextRequest) {
         market_signals_json: asRecord(bundle?.marketSignals) ?? null,
         company_research_json: asRecord(bundle?.companyResearch) ?? null,
         application_recommendation_json: asRecord(bundle?.recommendation) ?? null,
+        required_profile_json: asRecord(bundle?.requiredProfile) ?? null,
+        selected_evidence_json: asRecord(bundle?.selectedEvidence) ?? null,
+        positioning_brief_json: asRecord(bundle?.positioningBrief) ?? null,
         final_cv_text: asString(result.finalDrafts.finalCv) ?? null,
         final_cover_letter_text: asString(result.finalDrafts.finalCoverLetter) ?? null,
         input_type: jobUrl ? "url" : "text",
         run_outcome: result.telemetry.outcome,
-        degraded_reasons_json: asStringArray(result.insights.riskAreas),
+        degraded_reasons_json: degradedEvents,
         telemetry_json: result.telemetry,
         stage_statuses_json: stageStatuses,
         stage_durations_json: {},

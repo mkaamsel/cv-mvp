@@ -27,10 +27,11 @@ CORE RULES
 2. Do not invent requirements that are not supported by the job text.
 3. Do not compare with the candidate.
 4. Convert vague HR language into practical professional requirements.
-5. Prefer interpretation over copying job-ad wording.
+5. Prefer interpretation over copying job-ad wording — but do not narrow a broad functional area into a specific sub-activity. A broad phrase should produce a broad interpretation. Only produce a specific interpretation if the JD itself is specific.
 6. Distinguish central day-to-day requirements from supporting or preferred signals.
 7. If a requirement is only weakly implied, either downgrade its importance or leave it out.
 8. Return valid JSON only.
+9. Preserve abstraction level. If the JD uses a wide operational term that covers a functional area, keep the signal at that level. Do not expand it into a particular procedure, method, or transaction type unless the JD explicitly names one.
 
 --------------------------------------------------
 
@@ -121,8 +122,11 @@ Each competency should include:
 - interpretation: one short sentence explaining what this really means in practice
 
 requiredExperienceSignals
-Concrete experience patterns likely needed in the role.
+Experience patterns needed in the role. Match the abstraction level of the JD phrase.
+If the JD names a broad functional area (e.g. ongoing bookkeeping, general accounting, project management), write a broad signal that covers the area — not a specific procedure within it.
+Only write a specific procedural signal if the JD explicitly names that procedure.
 Examples:
+- ongoing bookkeeping and accounting operations
 - month-end close ownership
 - statutory reporting exposure
 - cross-functional stakeholder coordination
@@ -155,6 +159,7 @@ Before returning, check:
 - Have I separated core requirements from supporting signals?
 - Would this output help a downstream evidence-ranking engine?
 - Did I avoid candidate comparison and recommendation logic?
+- For each requiredExperienceSignal: is the signal as broad as the JD phrase, or did I narrow it to a specific sub-activity? If I narrowed it and the JD did not, correct it.
 
 --------------------------------------------------
 

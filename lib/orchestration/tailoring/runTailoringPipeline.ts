@@ -350,6 +350,7 @@ const DEFAULT_ENGINE_SWITCHES = {
   LAYER_8_POSITIONING_AI: true,
   LAYER_9_RECOMMENDATION: true,
   LAYER_9_RECOMMENDATION_AI: true,
+  LAYER_RECOMMENDATION_VALIDATION: true,
   LAYER_10_BUNDLE_ASSEMBLY: true,
   LAYER_11_GENERATION: true,
   LAYER_11_COVER_LETTER_AI: true,
@@ -574,42 +575,7 @@ function normalizeStructuredJob(input: unknown): StructuredJob {
     jobTitle = "";
   }
 
-  if (!jobTitle) {
-    const titleSignals = [
-      "accountant",
-      "buchhalter",
-      "bilanzbuchhalter",
-      "hauptbuchhalter",
-      "finance manager",
-      "finance",
-      "accounting",
-      "controller",
-      "controlling",
-      "manager accounting",
-      "senior accountant",
-    ];
-
-    const scanLines = [...responsibilities, ...requirements, summary];
-
-    for (const line of scanLines) {
-      const lower = line.toLowerCase();
-
-      if (looksLikeBadTitle(line)) continue;
-
-      for (const signal of titleSignals) {
-        if (lower.includes(signal)) {
-          jobTitle = line;
-          break;
-        }
-      }
-
-      if (jobTitle) break;
-    }
-  }
-
-  if (!jobTitle) {
-    jobTitle = "Finance / Accounting role";
-  }
+  // jobTitle remains "" if not reliably extracted — no fallback from body text
 
   return {
     companyName,
@@ -1363,15 +1329,13 @@ function mapAiSelectedEvidenceToInternal(
 function buildRecommendationPack(
   selectedEvidence: SelectedEvidencePack,
   missingSignals: string[],
-  marketSignals: MarketSignals,
 ): RecommendationPack {
   const evidenceCount = selectedEvidence.combinedTopEvidence.length;
   const missingCount = missingSignals.length;
 
   if (
     evidenceCount >= 5 &&
-    missingCount <= 1 &&
-    marketSignals.strictnessSignal !== "higher"
+    missingCount <= 1
   ) {
     return {
       applicationRecommendation: "apply_confidently",
@@ -1529,6 +1493,63 @@ function buildCompanyContextText(
 
 function buildBundleAssembly(input: BundleAssembly): BundleAssembly {
   return input;
+}
+
+// ── Recommendation Validation ─────────────────────────────────────────────────
+// Detects internal contradictions between the L9 label and the L8 positioning
+// strength. In v1 only the most obvious contradiction is corrected:
+// no blockers + strong positioning + at least two strong matches + cautious label.
+// Only applicationRecommendation is mutated — prose fields are left as-is.
+
+type ValidationResult = {
+  triggered: boolean;
+  originalLabel: RecommendationPack["applicationRecommendation"];
+  correctedLabel: RecommendationPack["applicationRecommendation"];
+  reason: string;
+};
+
+function validateRecommendation(
+  recommendation: RecommendationPack,
+  positioningBrief: PositioningBriefPack,
+): { recommendation: RecommendationPack; validation: ValidationResult } {
+  const original = recommendation.applicationRecommendation;
+
+  const noBlockers = recommendation.blockers.length === 0;
+  const cautious = original === "apply_with_care";
+  const strongPositioning = positioningBrief.positioningStrength === "strong";
+  const sufficientMatches = recommendation.strongMatches.length >= 2;
+
+  if (noBlockers && cautious && strongPositioning && sufficientMatches) {
+    return {
+      recommendation: {
+        ...recommendation,
+        applicationRecommendation: "apply_confidently",
+        advisorMessage:
+          "The profile shows multiple credible alignment points for this role.",
+        reasoningSummary:
+          "The role has several clear fit signals and only limited uncovered requirements.",
+        recommendation:
+          "Recommended to proceed. The profile appears credibly aligned for application.",
+      },
+      validation: {
+        triggered: true,
+        originalLabel: original,
+        correctedLabel: "apply_confidently",
+        reason:
+          "No blockers, positioningStrength=strong, strongMatches>=2, original label apply_with_care — upgraded to apply_confidently.",
+      },
+    };
+  }
+
+  return {
+    recommendation,
+    validation: {
+      triggered: false,
+      originalLabel: original,
+      correctedLabel: original,
+      reason: "No contradiction detected — recommendation unchanged.",
+    },
+  };
 }
 
 function buildCvDraft(
@@ -2371,7 +2392,6 @@ export async function runTailoringPipeline({
       recommendation = buildRecommendationPack(
         selectedEvidence,
         missingSignals,
-        marketSignals,
       );
       pipelineTrace.push("Layer9A: recommendation:rule:done");
 
@@ -2385,11 +2405,12 @@ export async function runTailoringPipeline({
               candidateProfile: normalizedCandidateProfile,
               structuredJob,
               requiredProfile,
+              // companyContext included for environmental framing only — must not affect fit verdict
               companyContext,
-              companyResearch,
-              marketSignals,
               selectedEvidence,
               missingSignals,
+              // companyResearch and marketSignals intentionally excluded from recommendation inputs
+              // they are enrichment-only signals used at document generation time (L11)
             },
             null,
             2,
@@ -2422,6 +2443,41 @@ export async function runTailoringPipeline({
       console.error("[runTailoringPipeline] Layer9 failed — continuing:", err);
       pipelineWarnings.push("Application recommendation couldn't be fully prepared. Your documents are ready.");
       pipelineTrace.push("Layer9A: recommendation:error:caught");
+    }
+  }
+
+  // ── Layer 9C — Recommendation Validation ─────────────────────────────────────
+  if (ENGINE_SWITCHES.LAYER_RECOMMENDATION_VALIDATION) {
+    try {
+      const tValidation = Date.now();
+      pipelineTrace.push("Layer9C: recommendation-validation:start");
+
+      const { recommendation: validatedRecommendation, validation } =
+        validateRecommendation(recommendation, positioningBrief);
+
+      recommendation = validatedRecommendation;
+
+      pipelineTrace.push(
+        validation.triggered
+          ? "Layer9C: recommendation-validation:upgraded"
+          : "Layer9C: recommendation-validation:no-change",
+      );
+
+      observationPoints.push(makeObservation(
+        "Layer9C_RecommendationValidation",
+        `L9 label: "${validation.originalLabel}", positioningStrength: "${positioningBrief.positioningStrength}", blockers: ${recommendation.blockers.length}, strongMatches: ${recommendation.strongMatches.length}`,
+        validation.triggered
+          ? `Contradiction detected — upgraded to "${validation.correctedLabel}". Reason: ${validation.reason}`
+          : `No contradiction. ${validation.reason}`,
+        "rule",
+        1.0,
+        tValidation,
+        [],
+        "The recommendation was cross-checked against positioning strength and evidence quality.",
+      ));
+    } catch (err) {
+      console.error("[runTailoringPipeline] Layer9C validation failed — continuing:", err);
+      pipelineTrace.push("Layer9C: recommendation-validation:error:caught");
     }
   }
 

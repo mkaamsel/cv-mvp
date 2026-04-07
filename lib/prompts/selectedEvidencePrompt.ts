@@ -56,6 +56,7 @@ RULES:
 - Do not repeat the same point across multiple arrays
 - combinedTopEvidence must be a subset drawn from strongEvidence and supportEvidence
 - Return valid JSON only — no commentary, no markdown
+- Functional equivalence within the same domain counts. If the candidate's evidence covers the same functional area as a requirement through different process vocabulary — for example, reconciliation and account clearing as a form of bookkeeping operations, or reporting-pack preparation as a form of financial reporting — classify it as strongEvidence or supportEvidence. Do not require word-for-word match. This principle applies only within the same functional domain: do not stretch evidence from a different domain to satisfy an unrelated requirement.
 
 ${languageHint}
 `.trim();

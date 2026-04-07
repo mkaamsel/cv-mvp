@@ -98,4 +98,86 @@ Three routes outside the architecture's allowed list have broken imports that fa
 
 ---
 
+---
+
+## ENGINEERING BACKLOG — OBSERVABILITY & QUALITY
+
+### B1 — Extraction Source Label Consistency
+**Priority:** Low–Medium
+**Observation:** URL-based extraction runs sometimes report `extractionSource: "pasted-text"` in Layer1 telemetry despite `inputType: "url"`. Misleading for debugging.
+**Action:** Audit the extraction pipeline to ensure `inputType` correctly reflects user input (url vs pasted text) and `extractionSource` correctly reflects the actual extraction path taken (direct fetch / readable fallback / pasted text). Separate these two concepts clearly in telemetry.
+
+### B2 — Layer9C Status Classification Mismatch
+**Priority:** Medium
+**Observation:** `stage_statuses_json` sometimes shows `Layer9C: "error"` while the pipeline trace reports `"Layer9C: recommendation-validation:no-change"`.
+**Action:** Review Layer9C validation logic. "no-change" outcomes must be classified as `"success"` or `"skipped"`. `"error"` must be reserved for real failures only. Correct the status assignment at the point where the validation result is recorded.
+
+### B3 — Protection Against Junk Job Descriptions
+**Priority:** Medium
+**Observation:** If users paste irrelevant or noisy text (email threads, tracking scripts, formatting noise), the AI extraction step may still attempt structured extraction without validating text quality first.
+**Action:** Design a pre-extraction safeguard layer. Approaches to investigate:
+1. **Signal Density Check** — minimum density of task/requirement indicators
+2. **Structural Detection** — verify presence of recognisable job structure signals (tasks, profile, requirements sections)
+3. **Semantic Validation** — ask the model to confirm whether the text resembles a job posting before extraction
+4. **Warning Layer** — if quality threshold not met, return a warning and prompt the user to paste a cleaner version
+
+**Constraint:** Must remain multilingual. No hardcoded language keywords anywhere in the implementation.
+
+### B7 — Mismatch Handling and Recommendation-Gated Document Generation
+**Priority:** Medium
+**Trigger:** Users may submit clearly mismatched JDs — career changers testing viability, stress testers, or mistaken submissions.
+
+**Tone rule — non-negotiable:**
+The system never rejects. It never says "no." It guides honestly, like a trusted mentor who tells the truth and then asks: "Do you still want to go for it? I'll support you either way." Every message — including for complete mismatches — must feel like advice from someone on the candidate's side, not a gatekeeper closing a door.
+
+**Proposed behaviour by recommendation label:**
+
+| Label | Auto-generate documents | UI behaviour |
+|---|---|---|
+| `apply_confidently` | Yes | Proceed directly to documents |
+| `apply_with_care` | Yes | Show assessment + documents |
+| `borderline` | Yes, with notice | Show assessment prominently, documents available below |
+| `not_recommended` | No — gate it | Show assessment with named gaps, offer "Generate anyway" as an explicit secondary action |
+
+**What is currently missing:**
+1. No early signal to the user before full pipeline runs for clear mismatches
+2. No UI gate on document generation for `not_recommended` outcomes — documents currently render unconditionally
+3. Advisor message quality degrades for extreme mismatches — needs an explicit instruction to name the specific gaps plainly rather than using softened but hollow language
+
+**Implementation scope when revisited:**
+- Pipeline unchanged — it already produces the correct signals
+- UI reads `applicationRecommendation` from the result and gates document generation for `not_recommended`
+- Advisor message prompt gets one additional instruction for `not_recommended`: name what is actually missing, what would need to change, and close with a genuine offer to help if the candidate wants to proceed anyway
+- No threshold language, no rejection language, no authority language anywhere in the output
+
+### B6 — Requirement Match Taxonomy + Positioning Bridge Model (V8)
+**Priority:** Medium — deferred
+**Concept:** Make requirement reasoning explicit across L7 (SelectedEvidence), L8 (PositioningBrief), and Layer9C (validation) by adding structured match classification signals.
+**Proposed match types:** `direct_match`, `adjacent_match`, `compensation_bridge`, `missing_but_noncritical`, `hard_blocker`
+**Assessment:** The five match types are the right framing, but the full 7-field proposal across 4 layers carries high implementation risk. The existing L7 buckets (strongEvidence / supportEvidence / transferableEvidence / weakEvidence) already encode this taxonomy implicitly. The real gap is narrower.
+**Agreed smaller implementation when revisited:**
+1. Add `bridgeReason: string` to each `transferableEvidence` item in L7 — one sentence explaining why the bridge is credible. Improves L8 and L9C reasoning directly.
+2. Add `blockerSeverity: "hard" | "soft"` to each item in `recommendation.blockers` — lets Layer9C distinguish real knockout blockers from soft concerns. Fixes recommendation over-caution more precisely than the current `blockers.length === 0` check.
+**Deferred fields:** `positioningModifiers`, `riskModifiers`, `matchType`, `positioningUsable`, `evidenceRole` — revisit after the two above are stable.
+**Constraints when implementing:** No new top-level pipeline layer. No architecture reorder. No sector hardcoding. CompanyContext and MarketSignals remain modifiers only.
+
+### B5 — CV Output Contains Internal Evaluation Language
+**Priority:** Medium
+**Impact:** Output credibility and beta readiness
+**Observation:** Some generated CV outputs include evaluation-style paragraphs that read like internal analysis rather than CV content. Example pattern: *"Manoj Agarwal has a solid background… While direct experience in X is not shown…"* This language appears to originate from reasoning or positioning layers.
+**Problem:** A CV must contain only factual candidate information and role-relevant positioning. Internal evaluation commentary reduces credibility and makes the output appear AI-generated.
+**Action:** Review the CV generation pipeline, particularly in `lib/engine/generators/cv/`. Ensure that:
+1. Internal evaluation text from positioning/review layers is never inserted into the final CV
+2. The CV generator outputs only: factual candidate information, structured experience, role-relevant positioning
+3. Any analytical or evaluative commentary remains strictly inside the internal pipeline and is never exposed in user-facing documents
+
+### B4 — Output Language Control in Final Output UI
+**Priority:** Medium
+**Observation:** The system detects input language but there is no user-facing language switch on the Final Output page.
+**Action:** Design a UI control allowing the user to override output language:
+- Default to detected language
+- Allow manual override (e.g. English, German, Spanish)
+- Propagate selection to CV and cover letter generation prompts
+- Must remain multilingual by design — no hardcoded language list
+
 *This file is the live backlog. Update after each session.*

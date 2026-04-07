@@ -140,6 +140,7 @@ anforderungsprofil.muss
 anforderungsprofil.soll
   Expected requirements — what a typical successful candidate is assumed to have, stated without softening or qualification.
   These are not hard blockers but are clearly expected. Identify by context: skills and experience the posting lists as standard expectations without marking them as optional.
+  Default rule for flat requirement sections: when the posting uses a recognisable requirements section (e.g. "Ihr Profil", "Was Sie mitbringen", "Your Profile", "Requirements", "Anforderungen", or equivalent heading in any language) and lists items without explicit qualification markers, classify all items in that section as soll. Do not leave soll empty when such a section exists and its items carry no softening language such as "ideally", "a plus", "preferred", "advantageous", or equivalent in any language.
 
 anforderungsprofil.kann
   Nice-to-have additions — items the posting explicitly marks as optional, advantageous, or preferred but not required.
@@ -194,7 +195,23 @@ async function extractWithAI(text: string): Promise<Partial<StructuredJob>> {
   });
 
   const raw = response.choices[0]?.message?.content ?? "{}";
-  return JSON.parse(raw) as Partial<StructuredJob>;
+  const parsed = JSON.parse(raw) as Partial<StructuredJob>;
+
+  // ── TEMPORARY DIAGNOSTICS — remove before beta ────────────────────────────
+  const anf = (parsed as Record<string, unknown>).anforderungsprofil;
+  if (anf === undefined) {
+    console.log("[extract-job][raw-anforderungsprofil] MISSING — full raw:", JSON.stringify(parsed, null, 2));
+  } else {
+    console.log("[extract-job][raw-anforderungsprofil] typeof:", typeof anf);
+    console.log("[extract-job][raw-anforderungsprofil] isArray:", Array.isArray(anf));
+    if (anf !== null && typeof anf === "object" && !Array.isArray(anf)) {
+      console.log("[extract-job][raw-anforderungsprofil] keys:", Object.keys(anf as object));
+    }
+    console.log("[extract-job][raw-anforderungsprofil] value:", JSON.stringify(anf, null, 2));
+  }
+  // ── END TEMPORARY DIAGNOSTICS ─────────────────────────────────────────────
+
+  return parsed;
 }
 
 // ── Normalisation helpers ──────────────────────────────────────────────────────
@@ -232,17 +249,52 @@ function normalizeStructuredJob(raw: Partial<StructuredJob>): StructuredJob {
     | { muss?: unknown; soll?: unknown; kann?: unknown }
     | undefined;
 
-  const muss = asStringArray(profil?.muss);
-  const soll = asStringArray(profil?.soll);
-  const kann = asStringArray(profil?.kann);
+  // Support both nested shape { anforderungsprofil: { muss, soll, kann } }
+  // and flattened dotted-key shape { "anforderungsprofil.muss": [...], ... }
+  const rawFlat = raw as Record<string, unknown>;
+  const muss = asStringArray(profil?.muss ?? rawFlat["anforderungsprofil.muss"]);
+  const soll = asStringArray(profil?.soll ?? rawFlat["anforderungsprofil.soll"]);
+  const kann = asStringArray(profil?.kann ?? rawFlat["anforderungsprofil.kann"]);
+
+  // Defensive fallback: if the model returned anforderungsprofil as a flat
+  // string array instead of the nested muss/soll/kann object, all three buckets
+  // above will be empty even though requirement content was extracted.
+  // asStringArray returns [] for objects/undefined and the items for flat arrays,
+  // so passing raw.anforderungsprofil directly detects the flat-array case.
+  // Only fires when all three buckets are simultaneously empty.
+  const flatAnforderungen = asStringArray(raw.anforderungsprofil);
+  const effectiveSoll = (() => {
+    // Normal case: soll has content from correct model classification
+    if (soll.length > 0) return soll;
+    // Flat-array shape: model returned anforderungsprofil as a string array
+    if (muss.length === 0 && kann.length === 0 && flatAnforderungen.length > 0)
+      return flatAnforderungen;
+    // All-in-kann shape: model classified unqualified requirements as optional
+    if (muss.length === 0 && kann.length > 0)
+      return kann;
+    return soll;
+  })();
 
   const companyContext = asString(raw.companyContext ?? raw.summary);
   const companyName = asString(raw.companyName);
-  const jobTitle = asString(raw.jobTitle);
+
+  const canonicalizeText = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const classifiedLines = new Set(
+    [...aufgaben, ...muss, ...soll, ...kann, ...effectiveSoll].map(canonicalizeText),
+  );
+  const rawTitle = asString(raw.jobTitle);
+  const canonicalTitle = canonicalizeText(rawTitle);
+  const titleWordCount = canonicalTitle ? canonicalTitle.split(" ").length : 0;
+  const jobTitle =
+    canonicalTitle.length > 0 &&
+    titleWordCount <= 16 &&
+    !classifiedLines.has(canonicalTitle)
+      ? rawTitle.trim()
+      : "";
 
   return {
     aufgaben,
-    anforderungsprofil: { muss, soll, kann },
+    anforderungsprofil: { muss, soll: effectiveSoll, kann },
     companyContext,
     hiddenBlockers: asStringArray(raw.hiddenBlockers),
     atsKeywords: asStringArray(raw.atsKeywords),
@@ -255,7 +307,7 @@ function normalizeStructuredJob(raw: Partial<StructuredJob>): StructuredJob {
     companyName,
     jobTitle,
     responsibilities: aufgaben,
-    requirements: [...muss, ...soll],
+    requirements: [...muss, ...effectiveSoll],
     summary: companyContext,
   };
 }
