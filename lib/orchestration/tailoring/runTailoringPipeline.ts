@@ -50,8 +50,7 @@ type RequiredProfile = {
   qualificationSignals: string[];
   technicalSignals: string[];
   softSignals: string[];
-  // EXP-01: core-only signals separated from supporting/preferred
-  coreRequirementSignals: string[];
+  coreRequirementSignals: string[]; // core-only signals, preferred/supporting excluded from missingCount
 };
 
 type CompanyContext = {
@@ -744,9 +743,8 @@ function deriveRequiredProfile(job: StructuredJob): RequiredProfile {
     qualificationSignals: dedupeStrings(qualifications).slice(0, 8),
     technicalSignals: dedupeStrings(technical).slice(0, 8),
     softSignals: dedupeStrings(soft).slice(0, 8),
-    // EXP-01: rule track has no importance signal; default to qualifications as proxy for core
+    
     coreRequirementSignals: dedupeStrings(qualifications).slice(0, 8),
-    // EXP-01 end
   };
 }
 
@@ -808,15 +806,13 @@ function mapAiRequiredProfileToInternal(
     ...softSignals,
   ]).slice(0, 10);
 
-  // EXP-01: extract core-only signals from AI competencies for importance-aware missing detection
   const coreRequirementSignals = dedupeStrings([
     ...competencies
       .filter((item) => item?.importance === "core")
       .map((item) => asString(item?.interpretation) || asString(item?.competency) || "")
       .filter(Boolean),
-    ...asStringArray(ai.requiredEducation).slice(0, 3), // education requirements are always core
+    ...asStringArray(ai.requiredEducation).slice(0, 3),
   ]).slice(0, 8);
-  // EXP-01 end
 
   if (
     responsibilitySignals.length === 0 &&
@@ -842,12 +838,10 @@ function mapAiRequiredProfileToInternal(
     technicalSignals:
       technicalSignals.length > 0 ? technicalSignals : fallback.technicalSignals,
     softSignals: softSignals.length > 0 ? softSignals : fallback.softSignals,
-    // EXP-01: populate core signals; fall back to full requirementSignals if AI returned none
     coreRequirementSignals:
       coreRequirementSignals.length > 0
         ? coreRequirementSignals
         : fallback.coreRequirementSignals,
-    // EXP-01 end
   };
 }
 
@@ -1231,7 +1225,6 @@ function buildMissingSignals(
     requiredProfile.coreRequirementSignals.length > 0
       ? requiredProfile.coreRequirementSignals
       : requiredProfile.requirementSignals;
-  // EXP-01 end
 
   if (!haystack) {
     return signalsToCheck.slice(0, 5);
@@ -1284,7 +1277,6 @@ function buildPositioningBriefPack(
 
   const coverLetterAngle =
     "Emphasise the most directly supported experience and frame the application around the strongest evidence of role fit.";
-  // EXP-03 end
 
   const cvEmphasis = dedupeStrings([
     ...selectedEvidence.strongEvidence.slice(0, 3),
@@ -1595,7 +1587,7 @@ function buildCvDraft(
     "Experienced professional with relevant background for the target role.";
 
   const roleLines = getCandidateRoleLines(candidateProfile).slice(0, 4);
-  const roleLabel = bundle.structuredJob.jobTitle || "the target role"; // EXP-03: removed hardcoded domain fallback
+  const roleLabel = bundle.structuredJob.jobTitle || "the target role";
   const companyLabel = bundle.structuredJob.companyName || "the organisation";
 
   return [
@@ -2025,7 +2017,7 @@ export async function runTailoringPipeline({
     qualificationSignals: [],
     technicalSignals: [],
     softSignals: [],
-    coreRequirementSignals: [], // EXP-01: populated by rule/AI track below
+    coreRequirementSignals: [],
   };
 
   if (ENGINE_SWITCHES.LAYER_3_REQUIRED_PROFILE) {

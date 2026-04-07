@@ -311,10 +311,15 @@ function buildLayerTrace(run: TailoringRun | null, layerId: LayerConfig["id"]): 
 
     case "recommendation":
       return {
+        // Note: actual L9 AI payload contains only companyContext (tone framing),
+        // selectedEvidence, and missingSignals. companyResearch and marketSignals
+        // are excluded from L9 — shown here as available context only, not AI inputs.
         input: {
           companyContext: run?.company_context_json ?? null,
-          companyResearch: run?.company_research_json ?? null,
-          marketSignals: run?.market_signals_json ?? null,
+          "[enrichment-only — not in AI payload]": {
+            companyResearch: run?.company_research_json ?? null,
+            marketSignals: run?.market_signals_json ?? null,
+          },
         },
         signals,
         output: run?.application_recommendation_json ?? null,

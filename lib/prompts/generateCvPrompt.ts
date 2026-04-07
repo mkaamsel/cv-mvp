@@ -70,6 +70,10 @@ Professional Summary
 - evidence-based
 - not generic
 - do not overpromise
+- include one role-alignment sentence that explains why the candidate's background is relevant
+  to the target role type — derive this from the job title, core requirements, and strongest evidence
+- do not invent evidence; only reframe existing signals from the bundle
+- if the role title or core requirements are absent from the bundle, omit the alignment sentence
 
 Professional Experience
 - reverse chronological order if chronology is clear

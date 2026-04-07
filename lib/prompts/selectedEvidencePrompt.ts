@@ -58,6 +58,28 @@ RULES:
 - Return valid JSON only — no commentary, no markdown
 - Functional equivalence within the same domain counts. If the candidate's evidence covers the same functional area as a requirement through different process vocabulary — for example, reconciliation and account clearing as a form of bookkeeping operations, or reporting-pack preparation as a form of financial reporting — classify it as strongEvidence or supportEvidence. Do not require word-for-word match. This principle applies only within the same functional domain: do not stretch evidence from a different domain to satisfy an unrelated requirement.
 
+SIGNAL INTERPRETATION RULES — apply these before classifying weakEvidence:
+
+Leadership signals:
+- If candidate evidence contains phrases such as "led team", "coordinated team", "managed team", or "supervised team",
+  treat this as informal leadership (leadershipSignal = informal).
+- If the job requires formal personnel responsibility and only informal leadership is evidenced,
+  express the gap as "limited evidence of formal personnel leadership" — not "no leadership experience".
+
+Consolidation signals:
+- Treat the following as consolidation-adjacent: intercompany reconciliations, group reporting,
+  consolidation packages, multi-entity closing, group accounting coordination.
+- If any of these exist in the candidate's evidence, express the gap as
+  "limited explicit consolidation ownership" — not "no consolidation experience".
+
+Tax / VAT signals:
+- If candidate evidence includes tax provisions, work with external tax advisors, or statutory
+  reporting compliance, classify this as indirect tax exposure.
+- Express the gap as "limited direct VAT ownership" — not "no VAT experience".
+
+These interpretations apply globally across all languages and domains. Adapt the wording
+appropriately to the output language while preserving the meaning distinction.
+
 ${languageHint}
 `.trim();
 }

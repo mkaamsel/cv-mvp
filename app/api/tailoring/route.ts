@@ -46,7 +46,9 @@ function deriveStageStatuses(trace: string[]): Record<string, string> {
     } else if (
       rest.endsWith(":done") ||
       rest.endsWith(":improved") ||
-      rest.endsWith(":report")
+      rest.endsWith(":report") ||
+      rest.endsWith(":no-change") ||  // Layer9C validation — no contradiction found
+      rest.endsWith(":upgraded")      // Layer9C validation — recommendation upgraded
     ) {
       dones.add(layerId);
     } else if (rest.endsWith(":fallback")) {

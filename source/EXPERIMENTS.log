@@ -24,7 +24,7 @@ Full rollback: `git reset --hard 991e8c8`
 
 ### EXP-01 — Importance-aware missingSignals
 
-**Status:** ACTIVE
+**Status:** PROMOTED — 2026-04-07
 **Date:** 2026-04-07
 **File:** `lib/orchestration/tailoring/runTailoringPipeline.ts`
 **Functions touched:**
@@ -62,7 +62,7 @@ preferred tools. Recommendation label improvement for genuine near-fit applicati
 
 ### EXP-02 — Reduced lexical fragility in buildMissingSignals
 
-**Status:** ACTIVE
+**Status:** ACTIVE — under observation (not yet promoted)
 **Date:** 2026-04-07
 **File:** `lib/orchestration/tailoring/runTailoringPipeline.ts`
 **Functions touched:**
@@ -93,7 +93,7 @@ on the single filter line in `buildMissingSignals`.
 
 ### EXP-03 — Remove hardcoded finance fallback text from rule-track positioning
 
-**Status:** ACTIVE
+**Status:** PROMOTED — 2026-04-07
 **Date:** 2026-04-07
 **File:** `lib/orchestration/tailoring/runTailoringPipeline.ts`
 **Functions touched:**
@@ -131,7 +131,7 @@ Restore the four string literals to their previous values (see git diff `991e8c8
 
 ### EXP-04 — Rule-track missingSignals moderated by L7 weakEvidence
 
-**Status:** ACTIVE
+**Status:** ACTIVE — provisional, not yet promoted (needs further run confirmation)
 **Date:** 2026-04-07
 **File:** `lib/orchestration/tailoring/runTailoringPipeline.ts`
 **Functions touched:**
@@ -173,6 +173,29 @@ try {
   console.error("[runTailoringPipeline] missingSignals failed — continuing:", err);
 }
 ```
+
+---
+
+---
+
+## Session: 2026-04-07 — Stabilisation
+
+**Trigger:** 3-run evaluation (AXA, ERGO, Rheinmetall) confirmed recommendation quality improvement.
+
+**Actions taken:**
+- EXP-01 promoted to baseline — experimental markers removed
+- EXP-03 promoted to baseline — experimental markers removed
+- EXP-02 retained as active experiment — needs further isolation before promoting
+- EXP-04 retained as provisional — needs a run where it would change an outcome before promoting
+
+**Additional fixes applied in this session (not experiments — permanent changes):**
+- Layer9C status mismatch fixed: `:no-change` and `:upgraded` now map to `"success"` in `deriveStageStatuses`
+- L9 riskAreas tightened: personality/behavioural speculation excluded from riskAreas
+- L7 signal interpretation rules added: leadership (informal vs formal), consolidation-adjacent, tax/indirect exposure
+- L9 gap wording calibration added: "limited X" vs "no X" language rules
+- Observatory L9 input label updated: enrichment signals (companyResearch, marketSignals) clearly marked as not in AI payload
+- Layer12A relevance scoring recalibrated: 1–10 scale with explicit band guidance (2–4 weak, 5–7 moderate, 8–10 strong)
+- CV summary prompt improved: role-alignment sentence instruction added
 
 ---
 

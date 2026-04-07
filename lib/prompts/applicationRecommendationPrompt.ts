@@ -134,6 +134,11 @@ stretchMatches
 
 riskAreas
 - meaningful concerns that reduce application credibility
+- include only concrete capability gaps: domain gaps, certification gaps, leadership gaps, technical skill gaps
+- do NOT include personality traits, behavioural speculation, or motivational observations
+  (e.g. do not include: "proactive mindset", "ownership mentality", "result-oriented personality")
+- if a requirement is behavioural and the candidate shows no evidence of it, omit it from riskAreas
+  and note it only in reasoningSummary if material
 
 blockers
 - central missing requirements or hard credibility issues
@@ -141,6 +146,27 @@ blockers
 
 recommendation
 - short practical guidance on how to proceed
+
+--------------------------------------------------
+
+GAP WORDING CALIBRATION
+
+When describing gaps in riskAreas or blockers, apply these wording rules:
+
+Leadership:
+- If candidate has led, coordinated, managed, or supervised a team informally,
+  express the gap as "limited evidence of formal personnel leadership" — not "no leadership".
+
+Consolidation / group reporting:
+- If candidate has intercompany reconciliations, group reporting, multi-entity closing,
+  or consolidation packages, express the gap as "limited explicit consolidation ownership" — not "no consolidation experience".
+
+Tax / VAT:
+- If candidate has tax provisions, works with external tax advisors, or handles statutory
+  reporting compliance, express the gap as "limited direct VAT ownership" — not "no VAT experience".
+
+Apply these calibrations in any language. The principle is: adjacent or indirect evidence
+produces a "limited direct X" gap, not an "absent X" gap.
 
 --------------------------------------------------
 

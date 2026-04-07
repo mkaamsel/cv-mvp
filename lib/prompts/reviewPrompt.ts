@@ -39,6 +39,11 @@ Flag:
 - older experience dominating more relevant recent experience
 - noisy or generic skills lists
 
+Score relevanceScore on a 1–10 scale using this calibration:
+- 2–4: weak relevance — evidence is mostly adjacent, old, or generic; poor role alignment
+- 5–7: moderate relevance — useful evidence present but not all core requirements addressed
+- 8–10: strong relevance — most core requirements directly evidenced; tight role alignment
+
 --------------------------------------------------
 
 3. Positioning discipline
@@ -146,7 +151,7 @@ RETURN FORMAT (JSON ONLY)
   "reviewReport": {
     "truthCheck": "pass | issues_detected",
     "unsupportedClaims": [],
-    "relevanceScore": 1,
+    "relevanceScore": 7,
     "inflationRisk": "low | medium | high",
     "weakEvidence": [],
     "genericLanguage": [],
