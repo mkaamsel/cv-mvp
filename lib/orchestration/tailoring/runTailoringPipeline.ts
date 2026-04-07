@@ -50,6 +50,8 @@ type RequiredProfile = {
   qualificationSignals: string[];
   technicalSignals: string[];
   softSignals: string[];
+  // EXP-01: core-only signals separated from supporting/preferred
+  coreRequirementSignals: string[];
 };
 
 type CompanyContext = {
@@ -742,6 +744,9 @@ function deriveRequiredProfile(job: StructuredJob): RequiredProfile {
     qualificationSignals: dedupeStrings(qualifications).slice(0, 8),
     technicalSignals: dedupeStrings(technical).slice(0, 8),
     softSignals: dedupeStrings(soft).slice(0, 8),
+    // EXP-01: rule track has no importance signal; default to qualifications as proxy for core
+    coreRequirementSignals: dedupeStrings(qualifications).slice(0, 8),
+    // EXP-01 end
   };
 }
 
@@ -803,6 +808,16 @@ function mapAiRequiredProfileToInternal(
     ...softSignals,
   ]).slice(0, 10);
 
+  // EXP-01: extract core-only signals from AI competencies for importance-aware missing detection
+  const coreRequirementSignals = dedupeStrings([
+    ...competencies
+      .filter((item) => item?.importance === "core")
+      .map((item) => asString(item?.interpretation) || asString(item?.competency) || "")
+      .filter(Boolean),
+    ...asStringArray(ai.requiredEducation).slice(0, 3), // education requirements are always core
+  ]).slice(0, 8);
+  // EXP-01 end
+
   if (
     responsibilitySignals.length === 0 &&
     requirementSignals.length === 0 &&
@@ -827,6 +842,12 @@ function mapAiRequiredProfileToInternal(
     technicalSignals:
       technicalSignals.length > 0 ? technicalSignals : fallback.technicalSignals,
     softSignals: softSignals.length > 0 ? softSignals : fallback.softSignals,
+    // EXP-01: populate core signals; fall back to full requirementSignals if AI returned none
+    coreRequirementSignals:
+      coreRequirementSignals.length > 0
+        ? coreRequirementSignals
+        : fallback.coreRequirementSignals,
+    // EXP-01 end
   };
 }
 
@@ -1205,13 +1226,23 @@ function buildMissingSignals(
     .join(" \n ")
     .trim();
 
+  // EXP-01: prefer core-only signals so preferred/supporting gaps don't inflate missingCount
+  const signalsToCheck =
+    requiredProfile.coreRequirementSignals.length > 0
+      ? requiredProfile.coreRequirementSignals
+      : requiredProfile.requirementSignals;
+  // EXP-01 end
+
   if (!haystack) {
-    return requiredProfile.requirementSignals.slice(0, 5);
+    return signalsToCheck.slice(0, 5);
   }
 
-  return requiredProfile.requirementSignals
-    .filter((requirement) => scoreOverlap(haystack, requirement) === 0)
+  // EXP-02: raise threshold from === 0 to < 2 so single shared common words
+  // don't falsely mark a requirement as covered; requirement needs 2+ token matches
+  return signalsToCheck
+    .filter((requirement) => scoreOverlap(haystack, requirement) < 2)
     .slice(0, 5);
+  // EXP-02 end
 }
 
 function buildPositioningBriefPack(
@@ -1232,10 +1263,11 @@ function buildPositioningBriefPack(
         ? "senior_specialist"
         : "specialist";
 
+  // EXP-03: removed hardcoded finance fallback strings; replaced with generic cross-sector wording
   const headline =
     asString(candidateProfile?.headline) ??
     asString(candidateProfile?.summary) ??
-    "Relevant finance background";
+    "";
 
   const coreWhyFit = [
     headline,
@@ -1247,11 +1279,12 @@ function buildPositioningBriefPack(
 
   const positioningStrategy =
     missingSignals.length > 0
-      ? "Position through proven accounting execution, strong closing and reconciliation credibility, and disciplined acknowledgment of qualification gaps."
-      : "Position through strong role alignment, closing credibility, and directly relevant accounting evidence.";
+      ? "Position through the strongest directly evidenced experience and acknowledge remaining gaps honestly and specifically."
+      : "Position through direct role alignment and the most relevant evidenced experience.";
 
   const coverLetterAngle =
-    "Emphasise credible accounting depth, international coordination, and conservative positioning without overstating formal qualification overlap.";
+    "Emphasise the most directly supported experience and frame the application around the strongest evidence of role fit.";
+  // EXP-03 end
 
   const cvEmphasis = dedupeStrings([
     ...selectedEvidence.strongEvidence.slice(0, 3),
@@ -1562,7 +1595,7 @@ function buildCvDraft(
     "Experienced professional with relevant background for the target role.";
 
   const roleLines = getCandidateRoleLines(candidateProfile).slice(0, 4);
-  const roleLabel = bundle.structuredJob.jobTitle || "Finance / Accounting role";
+  const roleLabel = bundle.structuredJob.jobTitle || "the target role"; // EXP-03: removed hardcoded domain fallback
   const companyLabel = bundle.structuredJob.companyName || "the organisation";
 
   return [
@@ -1992,6 +2025,7 @@ export async function runTailoringPipeline({
     qualificationSignals: [],
     technicalSignals: [],
     softSignals: [],
+    coreRequirementSignals: [], // EXP-01: populated by rule/AI track below
   };
 
   if (ENGINE_SWITCHES.LAYER_3_REQUIRED_PROFILE) {
@@ -2294,10 +2328,29 @@ export async function runTailoringPipeline({
 
   let missingSignals: string[] = [];
   try {
-    missingSignals = buildMissingSignals(
-      candidateProfileView,
-      requiredProfile,
-    );
+    const rawMissing = buildMissingSignals(candidateProfileView, requiredProfile);
+
+    // EXP-04: moderate rule-track missingSignals using L7 weakEvidence
+    // If L7 AI found evidence for a rule-flagged gap, remove it from missingSignals.
+    // Safety net: if moderation would empty the list entirely, keep the rule-track result.
+    if (ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE_AI && selectedEvidence.weakEvidence.length > 0) {
+      const weakLower = new Set(selectedEvidence.weakEvidence.map((s) => s.toLowerCase()));
+      // A rule-track gap is retained only if L7 also flagged it as weak evidence
+      // (meaning both tracks agree it is a real gap)
+      const reconciled = rawMissing.filter((signal) =>
+        weakLower.has(signal.toLowerCase()) ||
+        selectedEvidence.weakEvidence.some((w) =>
+          scoreOverlap(w, signal) >= 2
+        )
+      );
+      missingSignals = reconciled.length > 0 ? reconciled : rawMissing;
+      pipelineTrace.push(
+        `Layer7C: missingSignals:reconciled — rule:${rawMissing.length} → reconciled:${missingSignals.length}`
+      );
+    } else {
+      missingSignals = rawMissing;
+    }
+    // EXP-04 end
   } catch (err) {
     console.error("[runTailoringPipeline] missingSignals failed — continuing:", err);
   }
