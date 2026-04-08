@@ -85,3 +85,53 @@ The Document Library currently persists only in `WorkspaceState` / `sessionStora
 Terminal logs during testing showed two sequential `POST /api/extract-candidate-profile` calls (30.0s and 29.9s). Root cause not confirmed — could be a double-submit, a React effect firing twice (StrictMode double-invoke), or a retry on perceived timeout.
 
 **Fix later:** Add a guard in `handleBuildProfile` (or the calling effect) to prevent concurrent in-flight requests. Log the call site on each invocation to confirm single-trigger behaviour in production.
+
+---
+
+## B9 — No retry logic on transient AI failures
+
+**Logged:** 2026-04-08
+
+All AI API calls in the tailoring pipeline fail immediately on network error or timeout. There is no exponential backoff or single retry. Transient failures cause silent degradation recorded as `:error:caught` in the pipeline trace. Users see a degraded result with no indication that a retry could succeed.
+
+**Fix later:** Add a single retry with short delay for network-level failures in `withTimeout()` or at the layer call site. Do not retry on model errors (bad prompt / schema violation).
+
+---
+
+## B10 — candidate_satisfaction.client_run_id has no FK constraint
+
+**Logged:** 2026-04-08
+
+`candidate_satisfaction.client_run_id` is a plain `text` column with no foreign key to `tailoring_runs.client_run_id`. Satisfaction records can become orphaned if a run is deleted or if the client_run_id drifts. The observatory joins on this field, so orphans will silently drop from satisfaction aggregates.
+
+**Fix later:** Add a FK or at minimum an index + periodic orphan audit query. Decide whether satisfaction records should cascade-delete with runs or be retained.
+
+---
+
+## B11 — Company page fetch timeout is 5 seconds
+
+**Logged:** 2026-04-08
+
+`fetchCompanyPageSnippet()` in `runTailoringPipeline.ts` uses a 5-second HTTP timeout. CDN-gated sites, redirect chains, and slow corporate domains will reliably fail and trigger the Jina fallback or silent skip. This is likely to produce frequent silent degradations during testing.
+
+**Fix later:** Increase to 10–12 seconds, or make the timeout configurable via an env var. Log clearly when the fetch times out so degradation is visible in observatory.
+
+---
+
+## B12 — OpenAI model fallback to gpt-4.1-mini is silent
+
+**Logged:** 2026-04-08
+
+`MODEL_PRIORITY` in `extract-candidate-profile/route.ts` falls back to `"gpt-4.1-mini"` then `"gpt-4o-mini"` if `OPENAI_MODEL_EXTRACT_CANDIDATE_PROFILE` is unset. No log or warning is emitted when the fallback activates. A misconfigured env silently degrades extraction quality with no observable signal.
+
+**Fix later:** Log a `[WARN]` at startup or at call time when the env var is missing and a fallback model is used. Consider surfacing the active model name in tailoring run telemetry.
+
+---
+
+## B13 — Debug logs in extract-candidate-profile must be removed
+
+**Logged:** 2026-04-08
+
+Five temporary `[DEBUG extract-candidate-profile]` log lines were added to `app/api/extract-candidate-profile/route.ts` to trace fingerprint and skill-count behaviour during the profile idempotency investigation. They are intentionally retained for one further stringent test round.
+
+**Remove before beta:** Delete all lines matching `[DEBUG extract-candidate-profile]` from `route.ts` before any public or broader internal testing. They emit fingerprint prefixes and raw skill counts on every extraction request.

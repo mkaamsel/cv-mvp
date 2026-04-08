@@ -436,14 +436,65 @@ function normalizeLoadedDocuments(value: unknown): string[] {
     .filter((item): item is string => Boolean(item));
 }
 
+// Maps a StoredDocument.kind (DB schema) to the WorkspaceDocumentType used by
+// the Document Library. Must stay in sync with profile-store SourceKind values.
+function sourceKindToDocType(kind: unknown): WorkspaceDocumentType {
+  switch (kind) {
+    case "primary_cv":
+    case "additional_cv":
+      return "cv";
+    case "arbeitszeugnis":
+      return "reference";
+    case "certificate":
+      return "certificate";
+    default:
+      return "other";
+  }
+}
+
+// Converts the raw StoredDocument[] from /api/profile/load into WorkspaceDocument[]
+// so the Document Library can hydrate correctly after a restart (sessionStorage cleared).
+function normalizeLoadedWorkspaceDocuments(value: unknown): WorkspaceDocument[] {
+  if (!Array.isArray(value)) return [];
+  let counter = 0;
+  return value
+    .filter(isRecord)
+    .map((item): WorkspaceDocument | null => {
+      const fileName =
+        typeof item.fileName === "string" && item.fileName.trim()
+          ? item.fileName.trim()
+          : typeof item.name === "string" && item.name.trim()
+            ? item.name.trim()
+            : null;
+      const text = typeof item.text === "string" ? item.text : null;
+      if (!fileName || text === null) return null;
+      return {
+        id: `loaded-${++counter}-${Date.now()}`,
+        fileName,
+        docType: sourceKindToDocType(item.kind),
+        customLabel:
+          typeof item.description === "string" ? item.description : "",
+        text,
+        chars: text.length,
+        uploadedAt: typeof item.uploadedAt === "string" ? item.uploadedAt : "",
+      };
+    })
+    .filter((item): item is WorkspaceDocument => item !== null);
+}
+
 function mergeLoadedWorkspace(
   current: WorkspaceState,
   loadedProfile: WorkspaceCandidateProfile | null,
   loadedFiles: string[],
+  loadedDocuments: WorkspaceDocument[],
 ): WorkspaceState {
   const shouldUseLoadedProfile = !current.candidateProfile && loadedProfile;
   const mergedFiles =
     current.uploadedFiles.length > 0 ? current.uploadedFiles : loadedFiles;
+  // Only restore from DB if sessionStorage did not already have documents.
+  // This prevents overwriting an in-session library with the (potentially stale) DB copy.
+  const mergedDocuments =
+    current.documents.length > 0 ? current.documents : loadedDocuments;
 
   return {
     ...current,
@@ -451,6 +502,7 @@ function mergeLoadedWorkspace(
       ? loadedProfile
       : current.candidateProfile,
     uploadedFiles: mergedFiles,
+    documents: mergedDocuments,
     profileStatus:
       shouldUseLoadedProfile || current.candidateProfile
         ? "ready"
@@ -616,11 +668,14 @@ export default function WorkspaceProvider({
         const loadedFiles = normalizeLoadedDocuments(
           data.workspace?.documents ?? [],
         );
+        const loadedDocuments = normalizeLoadedWorkspaceDocuments(
+          data.workspace?.documents ?? [],
+        );
 
         if (cancelled) return;
 
         setState((current) =>
-          mergeLoadedWorkspace(current, loadedProfile, loadedFiles),
+          mergeLoadedWorkspace(current, loadedProfile, loadedFiles, loadedDocuments),
         );
       } catch {
         if (cancelled) return;

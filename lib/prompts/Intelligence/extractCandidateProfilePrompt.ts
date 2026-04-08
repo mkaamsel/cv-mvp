@@ -81,7 +81,13 @@ ENRICHMENT RULES:
 5. PRESERVE all existing verifiedClaims. Add new claims only from new document evidence.
 6. Language proficiency confirmed in any source MUST appear in languages[] and as a verifiedClaim.
 7. PRESERVE fullName, headline, and summary unless a new document provides a clear correction.
-8. Arbeitszeugnisse may strengthen leadershipSignals, strengths, and verifiedClaims only.
+8. Arbeitszeugnisse may strengthen leadershipSignals, strengths, and verifiedClaims.
+   They may ALSO add concrete responsibilities and tasks explicitly stated in the Zeugnis
+   for that role as new entries in that role's achievements array. Additive only — do not
+   remove or rewrite any existing role data from the CV. Do not inflate coreSkills with
+   generic terms not explicitly named in the Zeugnis. Performance language in the Zeugnis
+   (e.g. "stets zu unserer vollsten Zufriedenheit", rapid onboarding, resilience signals)
+   must become high-confidence verifiedClaims with the Zeugnis as evidence source.
 ${lockedEntries}
 EXISTING PROFILE (authoritative base — enrich only):
 ${JSON.stringify(existingProfile, null, 2)}
@@ -140,7 +146,12 @@ CORE RULES
    Never show the same item twice in any array.
 7. Language proficiency explicitly confirmed in any document is a verifiedClaim with confidence: "high".
 8. Arbeitszeugnisse may strengthen strengths, leadershipSignals, and verifiedClaims.
-   They must NOT introduce unsupported technical experience or override CV role data.
+   They may ALSO add concrete responsibilities and tasks explicitly stated in the Zeugnis
+   for that role as new entries in that role's achievements array. Additive only — do not
+   remove or rewrite any existing CV role data. Do not inflate coreSkills with generic
+   terms not explicitly named in the Zeugnis. Performance language in the Zeugnis
+   (e.g. "stets zu unserer vollsten Zufriedenheit", rapid onboarding, resilience signals)
+   must become high-confidence verifiedClaims with the Zeugnis as evidence source.
 9. Certificates may support certifications, tools, standards, or education.
    Only include explicitly stated information.
 10. Place anything uncertain but potentially valuable in openQuestions[]. Do not silently discard it.

@@ -1,3 +1,13 @@
+type ApplicationStrategy = {
+  cvLeadEvidence: string[];
+  coverLetterOpeningAngle: string;
+  gapHandling: string[];
+  confidenceLevel: "confident" | "assured" | "careful";
+  toneGuidance: string[];
+  priorityThemes: string[];
+  doNotOverclaim: string[];
+};
+
 export function buildGenerateCoverLetterInstructions(
   locale: string,
   writingLevel:
@@ -6,6 +16,7 @@ export function buildGenerateCoverLetterInstructions(
     | "C1 professional"
     | "Strong polished professional",
   languageContext?: string | null,
+  applicationStrategy?: ApplicationStrategy | null,
 ): string {
   const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
   const languageHint = `Write the cover letter in ${languageName}. Use contemporary, credible language suitable for real professional applications.`;
@@ -175,7 +186,21 @@ OUTPUT FORMAT RULES
 
 --------------------------------------------------
 
-${languageContext ? `${languageContext}\n\n--------------------------------------------------\n\n` : ""}Target language: ${languageName}
+${applicationStrategy ? `DOCUMENT STRATEGY
+
+The positioning layer has provided the following document-specific guidance.
+Follow it as prioritization input — it does not override the truth rules above.
+
+Confidence level: ${applicationStrategy.confidenceLevel}
+${applicationStrategy.toneGuidance.length > 0 ? `Tone guidance:\n${applicationStrategy.toneGuidance.map((t) => `- ${t}`).join("\n")}` : ""}
+${applicationStrategy.coverLetterOpeningAngle ? `Opening angle: ${applicationStrategy.coverLetterOpeningAngle}` : ""}
+${applicationStrategy.priorityThemes.length > 0 ? `Priority themes to connect to the role:\n${applicationStrategy.priorityThemes.map((t) => `- ${t}`).join("\n")}` : ""}
+${applicationStrategy.gapHandling.length > 0 ? `Gap handling:\n${applicationStrategy.gapHandling.map((g) => `- ${g}`).join("\n")}` : ""}
+${applicationStrategy.doNotOverclaim.length > 0 ? `Do not overclaim in these areas:\n${applicationStrategy.doNotOverclaim.map((d) => `- ${d}`).join("\n")}` : ""}
+
+--------------------------------------------------
+
+` : ""}${languageContext ? `${languageContext}\n\n--------------------------------------------------\n\n` : ""}Target language: ${languageName}
 Writing level: ${writingLevel}
 
 ${languageHint}

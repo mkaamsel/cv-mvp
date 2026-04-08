@@ -48,6 +48,17 @@ type UploadStatus =
   | { status: "uploading" }
   | { status: "error"; message: string };
 
+// Holds an uploaded file that is awaiting type confirmation before being
+// committed to the document library.
+type PendingDoc = {
+  fileName: string;
+  text: string;
+  chars: number;
+  blobUrl: string;
+  docType: DocType;
+  customLabel: string;
+};
+
 type ExtractCandidateProfileSuccess = {
   candidateProfile: Record<string, unknown>;
   warnings?: string[];
@@ -236,6 +247,12 @@ function normalizeWorkspaceCandidateProfile(
   };
 }
 
+// (client-side mergeProfiles removed — the server is now the single authority for
+// all profile merging. Same-doc rebuilds return fresh as authoritative; new-doc
+// enrichments are unioned + canonicalized server-side. Client-side union was the
+// primary inflation source: AI rephrasing of the same evidence was accepted as
+// new knowledge on every rebuild.)
+
 // ── Style constants ───────────────────────────────────────────────────────────
 
 const titleStyle: CSSProperties = {
@@ -325,6 +342,11 @@ export default function WorkspaceProfilePage() {
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const docIdRef = useRef(0);
+  const [pendingDoc, setPendingDoc] = useState<PendingDoc | null>(null);
+  // Guards the Document Library hydration so it fires exactly once — the first
+  // time state.documents becomes non-empty (whether from sessionStorage on mount
+  // or from the DB load that arrives after mount).
+  const hasHydratedDocs = useRef(false);
 
   // Paste-text staging
   const [pasteText, setPasteText] = useState("");
@@ -356,16 +378,25 @@ export default function WorkspaceProfilePage() {
     return `doc-${++docIdRef.current}-${Date.now()}`;
   }
 
-  // ── Hydrate Document Library from persisted state on mount ─────────────────
-  // Runs once. Restores docs from sessionStorage-backed WorkspaceState.
-  // blobUrl is null for restored docs (browser URLs cannot survive refresh);
-  // previews are unavailable but the extracted text is intact for building.
+  // ── Hydrate Document Library from persisted state ─────────────────────────
+  // No dep array: runs after every render until hydration fires once.
+  // This avoids the "dep array changed size" warning that occurs when switching
+  // from [] (mount-only) to [state.documents] (size-1) during a hot reload —
+  // React's size check is skipped when the new dep array is null (omitted).
+  // After hasHydratedDocs is set, the body is a cheap early-return on every
+  // subsequent render.
+  // Catches both sources:
+  //   1. sessionStorage restoration — state.documents is populated at mount
+  //   2. DB load via /api/profile/load — state.documents arrives after mount
+  // The hasHydratedDocs ref prevents a sync loop with the write-back effect.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
+    if (hasHydratedDocs.current) return;
     if (state.documents.length > 0) {
+      hasHydratedDocs.current = true;
       setDocs(state.documents.map((d) => ({ ...d, blobUrl: null })));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // deliberately empty — runs once on mount only
+  });
 
   // ── Sync Document Library back to persisted state when docs change ──────────
   // Strips the blobUrl (browser-only) before persisting.
@@ -474,24 +505,14 @@ export default function WorkspaceProfilePage() {
       }
       const fileName = data.fileName ?? file.name;
       const chars = data.metrics?.extractedChars ?? data.extractedText.length;
-      const id = generateDocId();
-      setDocs((prev) => {
-        // Replace if same filename already exists
-        const existing = prev.find((d) => d.fileName === fileName && d.blobUrl !== null);
-        if (existing?.blobUrl) URL.revokeObjectURL(existing.blobUrl);
-        return [
-          ...prev.filter((d) => !(d.fileName === fileName && d.blobUrl !== null)),
-          {
-            id,
-            fileName,
-            docType: "cv",
-            customLabel: "",
-            text: data.extractedText!,
-            chars,
-            uploadedAt: new Date().toLocaleTimeString(),
-            blobUrl,
-          },
-        ];
+      // Don't add to docs yet — hold in pendingDoc so the user confirms type first.
+      setPendingDoc({
+        fileName,
+        text: data.extractedText!,
+        chars,
+        blobUrl,
+        docType: "cv",
+        customLabel: "",
       });
       setUploadStatus({ status: "idle" });
     } catch {
@@ -559,10 +580,41 @@ export default function WorkspaceProfilePage() {
     });
   }
 
+  function handleConfirmPendingDoc() {
+    if (!pendingDoc) return;
+    const id = generateDocId();
+    setDocs((prev) => {
+      // Replace if same filename already exists
+      const existing = prev.find((d) => d.fileName === pendingDoc.fileName && d.blobUrl !== null);
+      if (existing?.blobUrl) URL.revokeObjectURL(existing.blobUrl);
+      return [
+        ...prev.filter((d) => !(d.fileName === pendingDoc.fileName && d.blobUrl !== null)),
+        {
+          id,
+          fileName: pendingDoc.fileName,
+          docType: pendingDoc.docType,
+          customLabel: pendingDoc.customLabel,
+          text: pendingDoc.text,
+          chars: pendingDoc.chars,
+          uploadedAt: new Date().toLocaleTimeString(),
+          blobUrl: pendingDoc.blobUrl,
+        },
+      ];
+    });
+    setPendingDoc(null);
+  }
+
+  function handleCancelPendingDoc() {
+    if (pendingDoc?.blobUrl) URL.revokeObjectURL(pendingDoc.blobUrl);
+    setPendingDoc(null);
+  }
+
   function handleClearDocs() {
     for (const doc of docs) {
       if (doc.blobUrl) URL.revokeObjectURL(doc.blobUrl);
     }
+    if (pendingDoc?.blobUrl) URL.revokeObjectURL(pendingDoc.blobUrl);
+    setPendingDoc(null);
     setDocs([]);
     setUploadStatus({ status: "idle" });
   }
@@ -594,15 +646,19 @@ export default function WorkspaceProfilePage() {
 
     const documents = docs.map((doc) => ({
       fileName: doc.fileName,
-      kind: doc.docType === "cv" ? "primary_cv" : doc.docType,
+      kind: doc.docType === "cv" ? "primary_cv" : doc.docType === "reference" ? "arbeitszeugnis" : doc.docType,
       text: doc.text,
       isPrimary: doc.docType === "cv",
       description:
         doc.docType === "other" && doc.customLabel ? doc.customLabel : undefined,
     }));
 
-    const existingProfilePayload = isEnrichMode
-      ? ((profile!.rawResponse as Record<string, unknown> | null | undefined) ??
+    // Always send the existing profile to the server when one exists.
+    // The server uses sourceFingerprint to decide: same-doc rebuild (authoritative fresh)
+    // vs new-doc enrichment (union + canonicalize). isEnrichMode must not gate this —
+    // rebuilds with a CV doc also need fingerprint comparison.
+    const existingProfilePayload = profile
+      ? ((profile.rawResponse as Record<string, unknown> | null | undefined) ??
           (profile as unknown as Record<string, unknown>))
       : null;
 
@@ -637,6 +693,10 @@ export default function WorkspaceProfilePage() {
         );
       }
 
+      // The server is the single authority for profile merging.
+      // Same-doc rebuilds: server returns fresh as authoritative (no union).
+      // New-doc enrichments: server unions + canonicalizes, then returns result.
+      // No client-side union — it was the primary inflation source.
       const normalizedProfile = normalizeWorkspaceCandidateProfile(
         data.candidateProfile,
       );
@@ -772,144 +832,229 @@ export default function WorkspaceProfilePage() {
           )}
         </div>
 
-        {docs.length === 0 ? (
-          <p style={{ ...copyStyle, margin: 0 }}>
-            Upload your documents or paste text below. Each source appears here
-            before being sent to the profile builder.
-          </p>
-        ) : (
-          <div style={{ display: "grid", gap: 10 }}>
-            {docs.map((doc) => (
-              <div
-                key={doc.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "10px 14px",
-                  borderRadius: t.radius.md,
-                  border: `1px solid ${t.colors.border}`,
-                  background: t.colors.surface,
-                  flexWrap: "wrap",
-                }}
-              >
-                {/* Icon */}
-                <span aria-hidden style={{ fontSize: 18, flexShrink: 0 }}>
+        {/* Horizontal document shelf — fixed height, does not grow with more docs */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            gap: 10,
+            overflowX: "auto",
+            overflowY: "hidden",
+            minHeight: 162,
+            maxHeight: 162,
+            alignItems: "stretch",
+            paddingBottom: 4,
+          }}
+        >
+          {/* Empty state */}
+          {docs.length === 0 && !pendingDoc && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                color: t.colors.textMuted,
+                fontSize: 13,
+                paddingLeft: 2,
+                whiteSpace: "nowrap",
+              }}
+            >
+              No documents yet — upload a file or paste text below.
+            </div>
+          )}
+
+          {/* Confirmed doc tiles */}
+          {docs.map((doc) => (
+            <div
+              key={doc.id}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                width: 152,
+                minWidth: 152,
+                padding: "8px 10px",
+                borderRadius: t.radius.md,
+                border: `1px solid ${t.colors.border}`,
+                background: t.colors.surface,
+                flexShrink: 0,
+                overflow: "hidden",
+              }}
+            >
+              {/* Icon + remove */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                <span aria-hidden style={{ fontSize: 15 }}>
                   {doc.blobUrl ? "📄" : "📝"}
                 </span>
-
-                {/* Name + meta */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {doc.blobUrl ? (
-                    <a
-                      href={doc.blobUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        fontWeight: 700,
-                        fontSize: 14,
-                        color: t.colors.textPrimary,
-                        textDecoration: "none",
-                        display: "block",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {doc.fileName}
-                    </a>
-                  ) : (
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        fontSize: 14,
-                        color: t.colors.textPrimary,
-                      }}
-                    >
-                      {doc.fileName}
-                    </span>
-                  )}
-                  <span
-                    style={{
-                      fontSize: 12,
-                      color: t.colors.textMuted,
-                      display: "block",
-                    }}
-                  >
-                    {doc.chars.toLocaleString()} chars · added {doc.uploadedAt}
-                  </span>
-                </div>
-
-                {/* Type selector */}
-                <select
-                  value={doc.docType}
-                  onChange={(e) =>
-                    handleDocTypeChange(doc.id, e.target.value as DocType)
-                  }
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 600,
-                    border: `1px solid ${t.colors.border}`,
-                    borderRadius: t.radius.sm,
-                    background: t.colors.surface,
-                    color: t.colors.textPrimary,
-                    padding: "4px 8px",
-                    cursor: "pointer",
-                  }}
-                >
-                  {(
-                    ["cv", "certificate", "reference", "other"] as DocType[]
-                  ).map((dt) => (
-                    <option key={dt} value={dt}>
-                      {DOC_TYPE_LABELS[dt]}
-                    </option>
-                  ))}
-                </select>
-
-                {/* Custom label when Other */}
-                {doc.docType === "other" && (
-                  <input
-                    type="text"
-                    placeholder="What is this document?"
-                    value={doc.customLabel}
-                    onChange={(e) =>
-                      handleDocLabelChange(doc.id, e.target.value)
-                    }
-                    style={{
-                      fontSize: 13,
-                      border: `1px solid ${t.colors.border}`,
-                      borderRadius: t.radius.sm,
-                      background: t.colors.surface,
-                      color: t.colors.textPrimary,
-                      padding: "4px 10px",
-                      width: 180,
-                      outline: "none",
-                    }}
-                  />
-                )}
-
-                {/* Remove */}
                 <button
                   type="button"
                   onClick={() => handleRemoveDoc(doc.id)}
                   aria-label={`Remove ${doc.fileName}`}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    fontSize: 18,
-                    color: t.colors.textMuted,
-                    lineHeight: 1,
-                    padding: "0 4px",
-                    flexShrink: 0,
-                  }}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: t.colors.textMuted, lineHeight: 1, padding: 0 }}
                 >
                   ×
                 </button>
               </div>
-            ))}
-          </div>
-        )}
+
+              {/* Filename */}
+              {doc.blobUrl ? (
+                <a
+                  href={doc.blobUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={doc.fileName}
+                  style={{ fontWeight: 700, fontSize: 12, color: t.colors.textPrimary, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", marginBottom: 6, flex: 1 }}
+                >
+                  {doc.fileName}
+                </a>
+              ) : (
+                <span
+                  title={doc.fileName}
+                  style={{ fontWeight: 700, fontSize: 12, color: t.colors.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", marginBottom: 6, flex: 1 }}
+                >
+                  {doc.fileName}
+                </span>
+              )}
+
+              {/* Type selector */}
+              <select
+                value={doc.docType}
+                onChange={(e) => handleDocTypeChange(doc.id, e.target.value as DocType)}
+                style={{ fontSize: 11, fontWeight: 600, border: `1px solid ${t.colors.border}`, borderRadius: t.radius.sm, background: t.colors.surface, color: t.colors.textPrimary, padding: "2px 4px", cursor: "pointer", width: "100%", marginBottom: 4 }}
+              >
+                {(["cv", "reference", "certificate", "other"] as DocType[]).map((dt) => (
+                  <option key={dt} value={dt}>{DOC_TYPE_LABELS[dt]}</option>
+                ))}
+              </select>
+
+              {/* Custom label for Other */}
+              {doc.docType === "other" && (
+                <input
+                  type="text"
+                  placeholder="Label…"
+                  value={doc.customLabel}
+                  onChange={(e) => handleDocLabelChange(doc.id, e.target.value)}
+                  style={{ fontSize: 11, border: `1px solid ${t.colors.border}`, borderRadius: t.radius.sm, background: t.colors.surface, color: t.colors.textPrimary, padding: "2px 6px", width: "100%", outline: "none", marginBottom: 4, boxSizing: "border-box" }}
+                />
+              )}
+
+              {/* Char count */}
+              <span style={{ fontSize: 10, color: t.colors.textMuted, marginTop: "auto" }}>
+                {doc.chars.toLocaleString()} chars
+              </span>
+            </div>
+          ))}
+
+          {/* Pending tile — awaiting type confirmation */}
+          {pendingDoc && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                width: 230,
+                minWidth: 230,
+                padding: "10px 12px",
+                borderRadius: t.radius.md,
+                border: `2px solid ${t.colors.primary}`,
+                background: t.colors.primarySoft,
+                flexShrink: 0,
+                gap: 6,
+                overflow: "hidden",
+              }}
+            >
+              {/* Filename + cancel */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
+                <span style={{ fontWeight: 700, fontSize: 12, color: t.colors.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={pendingDoc.fileName}>
+                  {pendingDoc.fileName}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCancelPendingDoc}
+                  aria-label="Cancel"
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: t.colors.textMuted, padding: 0, flexShrink: 0 }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <span style={{ fontSize: 11, fontWeight: 700, color: t.colors.textSecondary }}>
+                Choose type:
+              </span>
+
+              {/* Type buttons */}
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {(["cv", "reference", "certificate", "other"] as DocType[]).map((dt) => (
+                  <button
+                    key={dt}
+                    type="button"
+                    onClick={() => setPendingDoc((p) => p ? { ...p, docType: dt } : p)}
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: "3px 7px",
+                      borderRadius: t.radius.sm,
+                      border: `1px solid ${pendingDoc.docType === dt ? t.colors.textPrimary : t.colors.border}`,
+                      background: pendingDoc.docType === dt ? t.colors.textPrimary : t.colors.surface,
+                      color: pendingDoc.docType === dt ? t.colors.surface : t.colors.textPrimary,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {dt === "reference" ? "Zeugnis/Ref" : DOC_TYPE_LABELS[dt]}
+                  </button>
+                ))}
+              </div>
+
+              {/* Custom label for Other */}
+              {pendingDoc.docType === "other" && (
+                <input
+                  type="text"
+                  placeholder="Short label…"
+                  value={pendingDoc.customLabel}
+                  onChange={(e) => setPendingDoc((p) => p ? { ...p, customLabel: e.target.value } : p)}
+                  style={{ fontSize: 11, border: `1px solid ${t.colors.border}`, borderRadius: t.radius.sm, background: t.colors.surface, color: t.colors.textPrimary, padding: "3px 6px", outline: "none", width: "100%", boxSizing: "border-box" }}
+                />
+              )}
+
+              {/* Confirm */}
+              <button
+                type="button"
+                onClick={handleConfirmPendingDoc}
+                style={{ marginTop: "auto", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: t.radius.sm, border: "none", background: t.colors.textPrimary, color: t.colors.surface, cursor: "pointer", alignSelf: "flex-start" }}
+              >
+                Add to library →
+              </button>
+            </div>
+          )}
+
+          {/* Upload tile — always at the end */}
+          <button
+            type="button"
+            onClick={() => { if (!pendingDoc) fileInputRef.current?.click(); }}
+            disabled={uploadStatus.status === "uploading" || !!pendingDoc}
+            title={pendingDoc ? "Confirm the current document type first" : "Upload a file"}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 90,
+              minWidth: 90,
+              borderRadius: t.radius.md,
+              border: `1px dashed ${t.colors.border}`,
+              background: "transparent",
+              color: t.colors.textMuted,
+              cursor: (uploadStatus.status === "uploading" || !!pendingDoc) ? "not-allowed" : "pointer",
+              opacity: (uploadStatus.status === "uploading" || !!pendingDoc) ? 0.5 : 1,
+              flexShrink: 0,
+              gap: 6,
+            }}
+          >
+            <span style={{ fontSize: uploadStatus.status === "uploading" ? 16 : 24, lineHeight: 1 }}>
+              {uploadStatus.status === "uploading" ? "⏳" : "+"}
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 600 }}>
+              {uploadStatus.status === "uploading" ? "Reading…" : "Upload file"}
+            </span>
+          </button>
+        </div>
 
         {uploadStatus.status === "error" && (
           <div
@@ -1272,53 +1417,87 @@ export default function WorkspaceProfilePage() {
       {/* Conversation — full width */}
       <AppCard className="p-6">
         <h2 style={titleStyle}>Questions &amp; conversation</h2>
-        {!profile ? (
-          <p style={copyStyle}>
-            Build your profile to see system questions here.
-          </p>
-        ) : (profile.openQuestions?.length ?? 0) > 0 ? (
-          <>
-            <p style={copyStyle}>
-              The system flagged these questions while reading your documents.
-              They may indicate ambiguities or gaps worth addressing.
+
+        {/* Question list — fixed height, scrollable */}
+        <div
+          style={{
+            overflowY: "auto",
+            maxHeight: 220,
+            marginTop: 10,
+            paddingRight: 4,
+          }}
+        >
+          {!profile ? (
+            <p style={{ ...copyStyle, margin: 0 }}>
+              Build your profile to see system questions here.
             </p>
-            <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
-              {profile.openQuestions!.map((q, i) => (
-                <div
-                  key={i}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: t.radius.md,
-                    background: t.colors.accentYellow,
-                    fontSize: 14,
-                    color: t.colors.textSecondary,
-                    lineHeight: 1.6,
-                    display: "flex",
-                    gap: 10,
-                    alignItems: "flex-start",
-                  }}
-                >
-                  <span
+          ) : (profile.openQuestions?.length ?? 0) > 0 ? (
+            <>
+              <p style={{ ...copyStyle, marginTop: 0, marginBottom: 12 }}>
+                The system flagged these questions while reading your documents.
+                They may indicate ambiguities or gaps worth addressing.
+              </p>
+              <div style={{ display: "grid", gap: 8 }}>
+                {profile.openQuestions!.map((q, i) => (
+                  <div
+                    key={i}
                     style={{
-                      flexShrink: 0,
-                      fontWeight: 800,
-                      color: t.colors.textPrimary,
-                      fontSize: 13,
-                      marginTop: 2,
+                      padding: "10px 14px",
+                      borderRadius: t.radius.md,
+                      background: t.colors.accentYellow,
+                      fontSize: 14,
+                      color: t.colors.textSecondary,
+                      lineHeight: 1.6,
+                      display: "flex",
+                      gap: 10,
+                      alignItems: "flex-start",
                     }}
                   >
-                    Q{i + 1}
-                  </span>
-                  <span>{q}</span>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <p style={copyStyle}>
-            No open questions from the system. Your profile looks complete.
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        fontWeight: 800,
+                        color: t.colors.textPrimary,
+                        fontSize: 13,
+                        marginTop: 2,
+                      }}
+                    >
+                      Q{i + 1}
+                    </span>
+                    <span>{q}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p style={{ ...copyStyle, margin: 0 }}>
+              No open questions from the system. Your profile looks complete.
+            </p>
+          )}
+        </div>
+
+        {/* Answer / Clarification — placeholder for future interactive clarification */}
+        <div
+          style={{
+            marginTop: 16,
+            padding: "12px 16px",
+            borderRadius: t.radius.md,
+            border: `1px dashed ${t.colors.border}`,
+            background: t.colors.backgroundSoft,
+          }}
+        >
+          <p
+            style={{
+              margin: 0,
+              fontSize: 13,
+              color: t.colors.textMuted,
+              fontStyle: "italic",
+            }}
+          >
+            Answer / Clarification — future versions will allow answering these
+            questions to enrich the profile.
           </p>
-        )}
+        </div>
       </AppCard>
 
       {/* Row 3: Extracted Profile | What shaped this profile */}

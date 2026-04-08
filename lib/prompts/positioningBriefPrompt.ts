@@ -191,6 +191,45 @@ Ground each in owned responsibilities or direct qualifications only.
 
 --------------------------------------------------
 
+applicationStrategy
+
+A structured document strategy for the CV and cover letter writers.
+
+applicationStrategy.cvLeadEvidence
+3-5 short strings — the strongest evidence items to lead with in the CV.
+Each must be directly grounded in the candidate's owned experience or qualifications.
+
+applicationStrategy.coverLetterOpeningAngle
+One sentence. How the cover letter should open to establish credible relevance.
+Must be specific to this candidate and role. No generic motivation statements.
+
+applicationStrategy.gapHandling
+0-3 short strings — one per meaningful gap.
+Each explains how to handle that specific gap: acknowledge it honestly, frame adjacent evidence carefully, or omit if not material.
+Empty array if no meaningful gaps exist.
+
+applicationStrategy.confidenceLevel
+"confident" — strong direct fit; no hard blockers; position assertively.
+"assured" — solid fit with some gaps; position honestly but constructively.
+"careful" — significant gaps or hard blockers; position with care and restraint.
+
+applicationStrategy.toneGuidance
+1-4 short strings — guidance items on how the documents should read.
+Each item covers one dimension: seniority framing, specialist vs generalist, ownership language, hedging guidance.
+Derive from positioningTone, positioningStrength, and the evidence profile.
+
+applicationStrategy.priorityThemes
+2-3 short strings — the themes the documents should return to most often.
+Each theme should correspond to a core role requirement with direct evidence.
+Prefer coreWhyFit items over generic evidence items.
+
+applicationStrategy.doNotOverclaim
+0-4 short strings — specific areas where the candidate must not overstate.
+Includes: requirements not evidenced, adjacent experience presented as direct, tools implied but not confirmed.
+Empty array if nothing material.
+
+--------------------------------------------------
+
 RETURN EXACTLY THIS JSON STRUCTURE
 
 {
@@ -200,7 +239,16 @@ RETURN EXACTLY THIS JSON STRUCTURE
   "positioningRisks": string[],
   "positioningStrategy": string,
   "coverLetterAngle": string,
-  "cvEmphasis": string[]
+  "cvEmphasis": string[],
+  "applicationStrategy": {
+    "cvLeadEvidence": string[],
+    "coverLetterOpeningAngle": string,
+    "gapHandling": string[],
+    "confidenceLevel": "confident" | "assured" | "careful",
+    "toneGuidance": string[],
+    "priorityThemes": string[],
+    "doNotOverclaim": string[]
+  }
 }
 
 ${languageHint}

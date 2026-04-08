@@ -1,3 +1,13 @@
+type ApplicationStrategy = {
+  cvLeadEvidence: string[];
+  coverLetterOpeningAngle: string;
+  gapHandling: string[];
+  confidenceLevel: "confident" | "assured" | "careful";
+  toneGuidance: string[];
+  priorityThemes: string[];
+  doNotOverclaim: string[];
+};
+
 export function buildGenerateCvInstructions(
   locale: string,
   writingLevel:
@@ -6,6 +16,7 @@ export function buildGenerateCvInstructions(
     | "C1 professional"
     | "Strong polished professional",
   languageContext?: string | null,
+  applicationStrategy?: ApplicationStrategy | null,
 ): string {
   const languageName = locale === "de" ? "German" : locale === "es" ? "Spanish" : "English";
   const languageHint = `Write the CV in ${languageName}. Keep the wording contemporary, credible, and suitable for professional applications.`;
@@ -144,7 +155,20 @@ Keep all body text in clean, complete sentences suited to justified paragraph la
 
 --------------------------------------------------
 
-${languageContext ? `${languageContext}\n\n--------------------------------------------------\n\n` : ""}Target language: ${languageName}
+${applicationStrategy ? `DOCUMENT STRATEGY
+
+The positioning layer has provided the following document-specific guidance.
+Follow it as prioritization input — it does not override the evidence rules above.
+
+Confidence level: ${applicationStrategy.confidenceLevel}
+${applicationStrategy.toneGuidance.length > 0 ? `Tone guidance:\n${applicationStrategy.toneGuidance.map((t) => `- ${t}`).join("\n")}` : ""}
+${applicationStrategy.cvLeadEvidence.length > 0 ? `Lead with these evidence items:\n${applicationStrategy.cvLeadEvidence.map((e) => `- ${e}`).join("\n")}` : ""}
+${applicationStrategy.priorityThemes.length > 0 ? `Priority themes to return to:\n${applicationStrategy.priorityThemes.map((t) => `- ${t}`).join("\n")}` : ""}
+${applicationStrategy.doNotOverclaim.length > 0 ? `Do not overclaim in these areas:\n${applicationStrategy.doNotOverclaim.map((d) => `- ${d}`).join("\n")}` : ""}
+
+--------------------------------------------------
+
+` : ""}${languageContext ? `${languageContext}\n\n--------------------------------------------------\n\n` : ""}Target language: ${languageName}
 Writing level: ${writingLevel}
 
 ${languageHint}

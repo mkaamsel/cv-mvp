@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { withTimeout } from "@/lib/engine/core/withTimeout";
 import { buildExtractCandidateProfileInstructions } from "@/lib/prompts/Intelligence/extractCandidateProfilePrompt";
+import { buildCanonicalizeProfileInstructions } from "@/lib/prompts/canonicalizeProfilePrompt";
 import { detectInputLanguages, normalizeLang, resolveOutputLanguage } from "@/lib/profile/languageDetection";
 import type { SupportedLanguage } from "@/lib/profile/languageDetection";
 import type { CorrectionLogEntry } from "@/lib/profile/profile-store";
@@ -26,6 +27,12 @@ type ExtractCandidateProfileRequest = {
 };
 
 type CandidateProfileResponse = {
+  // Stable fingerprint of the document set that produced this profile.
+  // Stored in rawResponse so it survives round-trips through the client.
+  // On the next rebuild the server compares the incoming fingerprint against
+  // this value to decide: same-doc rebuild (replace) vs new-doc enrichment (union).
+  sourceFingerprint?: string;
+
   fullName?: string | null;
   headline?: string | null;
   summary?: string | null;
@@ -108,6 +115,26 @@ function clampText(
 ): { text: string; truncated: boolean } {
   if (text.length <= maxChars) return { text, truncated: false };
   return { text: text.slice(0, maxChars).trim(), truncated: true };
+}
+
+/**
+ * Compute a stable fingerprint for a set of input documents.
+ * Two calls with identical document content and filenames (in any order) produce
+ * the same string. Any change — content edit, rename, addition, removal — changes it.
+ * Does not require a crypto library: it concatenates sorted (name::length::prefix) tuples.
+ */
+function computeDocumentFingerprint(documents: InputDocument[]): string {
+  const entries = documents
+    .filter((d) => typeof d.text === "string" && d.text.trim().length > 0)
+    .map((d) => {
+      const name = (d.fileName ?? "").trim();
+      const text = (typeof d.text === "string" ? d.text : "").trim();
+      // Include name + exact byte count + first 200 chars.
+      // This detects: renames, any text changes, additions, removals.
+      return `${name}::${text.length}::${text.slice(0, 200)}`;
+    })
+    .sort(); // order-independent
+  return entries.join("|||");
 }
 
 function sanitizeDocuments(documents: InputDocument[]): {
@@ -334,6 +361,247 @@ function reapplyUserCorrections(
   return p;
 }
 
+// ── Merge + Canonicalize (enrichment mode) ────────────────────────────────────
+
+type RawClaim = {
+  claim: string;
+  evidence: string[];
+  confidence: "high" | "medium";
+};
+
+/**
+ * Safely extract verified claims from an arbitrary (pre-serialized) profile object.
+ */
+function extractClaimsFromRaw(value: unknown): RawClaim[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (x): x is Record<string, unknown> =>
+        x !== null && typeof x === "object" && !Array.isArray(x),
+    )
+    .flatMap((x): RawClaim[] => {
+      const claim = typeof x.claim === "string" ? x.claim.trim() : null;
+      if (!claim) return [];
+      const evidence = Array.isArray(x.evidence)
+        ? (x.evidence as unknown[])
+            .filter((e): e is string => typeof e === "string")
+            .map((e) => e.trim())
+            .filter(Boolean)
+        : [];
+      const confidence: "high" | "medium" =
+        x.confidence === "high" ? "high" : "medium";
+      return [{ claim, evidence, confidence }];
+    });
+}
+
+/**
+ * Union two claim arrays deduplicated by normalized claim text (exact match).
+ * Near-duplicate semantic collapse is left to the AI canonicalization step.
+ */
+function unionClaims(a: RawClaim[], b: RawClaim[]): RawClaim[] {
+  const seen = new Set(
+    a.map((c) =>
+      c.claim
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim(),
+    ),
+  );
+  const result = [...a];
+  for (const c of b) {
+    const key = c.claim.toLowerCase().replace(/\s+/g, " ").trim();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(c);
+    }
+  }
+  return result;
+}
+
+/**
+ * Run after extraction + sanitization + corrections when in enrichment mode.
+ *
+ * Two modes, chosen by comparing document fingerprints:
+ *
+ * REBUILD_SAME_DOCS (fingerprints match):
+ *   The fresh extraction already read every document that built the existing profile.
+ *   Unioning existing + fresh would accept AI rephrasing as new evidence, inflating
+ *   the profile on every rebuild. Instead, return fresh directly — it is the
+ *   authoritative read of the unchanged source set.
+ *
+ * ENRICH_NEW_DOCS (fingerprints differ):
+ *   New documents have been added. Union is correct: preserve existing evidence
+ *   and add what the new documents contribute. Then run AI canonicalization to
+ *   collapse semantic/multilingual duplicates.
+ *   Safety guard: AI can only shrink or equal counts, never inflate.
+ *   Non-blocking: any failure returns the basic-merged profile unchanged.
+ */
+async function mergeAndCanonicalizeEnrichment(
+  fresh: CandidateProfileResponse,
+  existing: Record<string, unknown>,
+  incomingFingerprint: string,
+): Promise<CandidateProfileResponse> {
+  const existingFingerprint =
+    typeof existing.sourceFingerprint === "string"
+      ? existing.sourceFingerprint
+      : null;
+
+  // REBUILD_SAME_DOCS: fresh extraction is authoritative — skip union entirely.
+  if (existingFingerprint !== null && incomingFingerprint === existingFingerprint) {
+    console.log("[extract-candidate-profile] same-doc rebuild detected — using fresh extraction as authoritative (no union)");
+    return fresh;
+  }
+
+  // ENRICH_NEW_DOCS: union accumulator fields from existing + new evidence.
+  console.log("[extract-candidate-profile] new-doc enrichment — unioning existing + fresh");
+
+  // Step 1 — union accumulator fields deterministically
+  const mergedSkills = deduplicateArray([
+    ...cleanStringArray(existing.coreSkills),
+    ...(fresh.coreSkills ?? []),
+  ]);
+  const mergedTools = deduplicateArray([
+    ...cleanStringArray(existing.tools),
+    ...(fresh.tools ?? []),
+  ]);
+  const mergedIndustries = deduplicateArray([
+    ...cleanStringArray(existing.industries),
+    ...(fresh.industries ?? []),
+  ]);
+  const mergedClaims = unionClaims(
+    extractClaimsFromRaw(existing.verifiedClaims),
+    fresh.verifiedClaims ?? [],
+  );
+  // openQuestions: fresh extraction is authoritative (not unioned).
+  // The canonicalization AI will suppress any that are already answered.
+  const freshQuestions = fresh.openQuestions ?? [];
+
+  const baseMerged: CandidateProfileResponse = {
+    ...fresh,
+    coreSkills: mergedSkills,
+    tools: mergedTools,
+    industries: mergedIndustries,
+    verifiedClaims: mergedClaims,
+    openQuestions: freshQuestions,
+  };
+
+  // Step 2 — AI semantic canonicalization
+  const model = MODEL_PRIORITY[0] || "gpt-4.1-mini";
+  const instructions = buildCanonicalizeProfileInstructions();
+  const input = {
+    coreSkills: mergedSkills,
+    industries: mergedIndustries,
+    verifiedClaims: mergedClaims,
+    openQuestions: freshQuestions,
+  };
+
+  try {
+    const response = await withTimeout(
+      openai.responses.create({
+        model,
+        input: [
+          {
+            role: "system",
+            content: [{ type: "input_text", text: instructions }],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: JSON.stringify(input, null, 2) },
+            ],
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "canonicalized_profile",
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                coreSkills: { type: "array", items: { type: "string" } },
+                industries: { type: "array", items: { type: "string" } },
+                verifiedClaims: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      claim: { type: "string" },
+                      evidence: { type: "array", items: { type: "string" } },
+                      confidence: { type: "string", enum: ["high", "medium"] },
+                    },
+                    required: ["claim", "evidence", "confidence"],
+                  },
+                },
+                openQuestions: { type: "array", items: { type: "string" } },
+              },
+              required: [
+                "coreSkills",
+                "industries",
+                "verifiedClaims",
+                "openQuestions",
+              ],
+            },
+          },
+        },
+      }),
+      20000,
+    );
+
+    type CanonResult = {
+      coreSkills: string[];
+      industries: string[];
+      verifiedClaims: RawClaim[];
+      openQuestions: string[];
+    };
+    const result = JSON.parse(response.output_text) as CanonResult;
+
+    // Step 3 — safety guard: never let the AI inflate counts
+    const canonical: CandidateProfileResponse = {
+      ...baseMerged,
+      coreSkills:
+        Array.isArray(result.coreSkills) &&
+        result.coreSkills.length <= mergedSkills.length
+          ? result.coreSkills
+          : mergedSkills,
+      industries:
+        Array.isArray(result.industries) &&
+        result.industries.length <= mergedIndustries.length
+          ? result.industries
+          : mergedIndustries,
+      verifiedClaims:
+        Array.isArray(result.verifiedClaims) &&
+        result.verifiedClaims.length <= mergedClaims.length
+          ? result.verifiedClaims
+          : mergedClaims,
+      openQuestions:
+        Array.isArray(result.openQuestions) &&
+        result.openQuestions.length <= freshQuestions.length
+          ? result.openQuestions
+          : freshQuestions,
+    };
+
+    console.log("[extract-candidate-profile] canonicalize done:", {
+      skills: `${mergedSkills.length} → ${canonical.coreSkills?.length ?? 0}`,
+      industries: `${mergedIndustries.length} → ${canonical.industries?.length ?? 0}`,
+      claims: `${mergedClaims.length} → ${canonical.verifiedClaims?.length ?? 0}`,
+      questions: `${freshQuestions.length} → ${canonical.openQuestions?.length ?? 0}`,
+    });
+
+    return canonical;
+  } catch (err) {
+    // Step 4 — non-blocking: return basic-merged profile if AI call fails
+    console.warn(
+      "[extract-candidate-profile] canonicalization failed — using basic-merged profile:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return baseMerged;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function extractCandidateProfile(
   preparedText: string,
   outputLanguage: SupportedLanguage,
@@ -492,6 +760,11 @@ export async function POST(req: NextRequest) {
     const documents = Array.isArray(body.documents) ? body.documents : [];
     const prepared = sanitizeDocuments(documents);
 
+    // Compute a fingerprint of the incoming document set.
+    // Passed to mergeAndCanonicalizeEnrichment so it can distinguish a same-doc
+    // rebuild (replace) from a genuine new-doc enrichment (union).
+    const incomingFingerprint = computeDocumentFingerprint(documents);
+
     // Detect input languages from document texts
     const detectedInputLanguages = detectInputLanguages(prepared.rawTexts ?? []);
 
@@ -531,6 +804,22 @@ export async function POST(req: NextRequest) {
       existingProfile = profileWithoutLog;
     }
 
+    // DEBUG — fingerprint trace (temporary, remove after test run)
+    {
+      const _existingFp = existingProfile
+        ? (typeof existingProfile.sourceFingerprint === "string"
+            ? existingProfile.sourceFingerprint
+            : "(none)")
+        : "(no existing profile)";
+      const _fpMatch =
+        existingProfile !== null &&
+        typeof existingProfile.sourceFingerprint === "string" &&
+        incomingFingerprint === existingProfile.sourceFingerprint;
+      console.log("[DEBUG extract-candidate-profile] incomingFingerprint:", incomingFingerprint.slice(0, 120));
+      console.log("[DEBUG extract-candidate-profile] existingFingerprint:", _existingFp.slice(0, 120));
+      console.log("[DEBUG extract-candidate-profile] fingerprintsMatch:", _fpMatch);
+    }
+
     if (!prepared.ok) {
       if (!existingProfile) {
         return NextResponse.json(
@@ -550,6 +839,9 @@ export async function POST(req: NextRequest) {
       correctionLog,
     );
 
+    // DEBUG — skill count after fresh AI extraction (temporary, remove after test run)
+    console.log("[DEBUG extract-candidate-profile] skill count — fresh extraction:", (rawExtracted.coreSkills ?? []).length);
+
     // Post-process: sanitize, dedup, add language metadata
     let candidateProfile = sanitizeCandidateProfile(
       rawExtracted,
@@ -563,6 +855,29 @@ export async function POST(req: NextRequest) {
       candidateProfile = reapplyUserCorrections(candidateProfile, correctionLog);
       console.log(`[extract-candidate-profile] re-applied ${correctionLog.length} user correction(s)`);
     }
+
+    // DEBUG — skill count after sanitize + corrections (temporary, remove after test run)
+    console.log("[DEBUG extract-candidate-profile] skill count — post-sanitize+corrections:", (candidateProfile.coreSkills ?? []).length);
+
+    // Enrichment mode: detect same-doc rebuild vs genuine new-doc enrichment.
+    // Same docs → fresh extraction is authoritative (no union, prevents inflation).
+    // New docs → union + AI canonicalization collapses semantic/multilingual duplicates.
+    // Non-blocking: any failure returns the basic-merged (or fresh) profile unchanged.
+    if (existingProfile) {
+      candidateProfile = await mergeAndCanonicalizeEnrichment(
+        candidateProfile,
+        existingProfile,
+        incomingFingerprint,
+      );
+    }
+
+    // Attach the fingerprint to the profile so it survives round-trips through
+    // rawResponse and is available to the next rebuild for same-doc detection.
+    candidateProfile = { ...candidateProfile, sourceFingerprint: incomingFingerprint };
+
+    // DEBUG — skill counts at final return (temporary, remove after test run)
+    console.log("[DEBUG extract-candidate-profile] skill count — post-canonicalization:", (candidateProfile.coreSkills ?? []).length);
+    console.log("[DEBUG extract-candidate-profile] skill count — final returned:", (candidateProfile.coreSkills ?? []).length);
 
     return NextResponse.json({
       candidateProfile,
