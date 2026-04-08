@@ -118,7 +118,7 @@ async function fetchCleanText(url: string): Promise<{ text: string; source: stri
     );
   }
 
-  return { text, source: "direct" };
+  return { text, source: "direct-fetch" };
 }
 
 // ── AI extraction ─────────────────────────────────────────────────────────────

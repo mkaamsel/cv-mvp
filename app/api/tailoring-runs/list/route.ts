@@ -59,12 +59,16 @@ export async function GET(request: Request) {
           "market_signals_json",
           "company_research_json",
           "application_recommendation_json",
+          "required_profile_json",
+          "selected_evidence_json",
+          "positioning_brief_json",
           "telemetry_json",
           "stage_statuses_json",
           "stage_durations_json",
           "final_cv_text",
           "final_cover_letter_text",
           "degraded_reasons_json",
+          "candidate_profile_json",
         ].join(", ")
       )
       .eq("user_id", user.id)
@@ -93,11 +97,11 @@ export async function GET(request: Request) {
     }
 
     const runs = Array.isArray(data)
-  ? data.map((row: any) => {
-      const { user_id, ...run } = row;
-      return run;
-    })
-  : [];
+      ? data.map((row: any) => {
+          const { user_id, ...run } = row;
+          return run;
+        })
+      : [];
 
     return NextResponse.json({
       ok: true,

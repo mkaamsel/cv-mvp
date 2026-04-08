@@ -192,6 +192,7 @@ export async function POST(req: NextRequest) {
         market_signals_json: asRecord(bundle?.marketSignals) ?? null,
         company_research_json: asRecord(bundle?.companyResearch) ?? null,
         application_recommendation_json: asRecord(bundle?.recommendation) ?? null,
+        candidate_profile_json: asRecord(bundle?.candidateProfile) ?? null,
         required_profile_json: asRecord(bundle?.requiredProfile) ?? null,
         selected_evidence_json: asRecord(bundle?.selectedEvidence) ?? null,
         positioning_brief_json: asRecord(bundle?.positioningBrief) ?? null,

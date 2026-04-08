@@ -152,6 +152,21 @@ export type WorkspaceFinalDrafts = {
   rawResponse?: unknown;
 };
 
+export type WorkspaceDocumentType = "cv" | "certificate" | "reference" | "other";
+
+// Persisted document metadata — stored in WorkspaceState and synced to sessionStorage.
+// Includes extracted text so the Document Library survives page refresh/navigation.
+// blobUrl is intentionally excluded: it is a browser-only object URL that cannot persist.
+export type WorkspaceDocument = {
+  id: string;
+  fileName: string;
+  docType: WorkspaceDocumentType;
+  customLabel: string;
+  text: string;
+  chars: number;
+  uploadedAt: string;
+};
+
 export type WorkspaceStepKey = "profile" | "job" | "insights" | "final";
 
 export type WorkspaceStepStatus = "idle" | "loading" | "ready" | "error";
@@ -232,6 +247,9 @@ export type WorkspaceState = {
   insights: WorkspaceInsights | null;
   finalDrafts: WorkspaceFinalDrafts | null;
 
+  // Persistent document library — survives refresh/navigation via sessionStorage.
+  documents: WorkspaceDocument[];
+  // Last-build filenames — shown in "Sources in last build" (separate from the library).
   uploadedFiles: string[];
   jobUrl: string;
   jobText: string;

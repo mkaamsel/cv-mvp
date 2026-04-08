@@ -11,6 +11,8 @@ import {
 } from "react";
 import type {
   WorkspaceCandidateProfile,
+  WorkspaceDocument,
+  WorkspaceDocumentType,
   WorkspaceFinalDrafts,
   WorkspaceInsights,
   WorkspaceInputType,
@@ -30,6 +32,7 @@ type WorkspaceContextValue = {
   state: WorkspaceState;
   progress: WorkspaceProgress;
 
+  setDocuments: (docs: WorkspaceDocument[]) => void;
   setUploadedFiles: (files: string[]) => void;
   setJobInput: (payload: { jobUrl?: string; jobText?: string }) => void;
 
@@ -144,6 +147,7 @@ const initialState: WorkspaceState = {
   insights: null,
   finalDrafts: null,
 
+  documents: [],
   uploadedFiles: [],
   jobUrl: "",
   jobText: "",
@@ -171,6 +175,45 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function isDocType(value: unknown): value is WorkspaceDocumentType {
+  return (
+    value === "cv" ||
+    value === "certificate" ||
+    value === "reference" ||
+    value === "other"
+  );
+}
+
+function restoreDocuments(value: unknown): WorkspaceDocument[] {
+  if (!Array.isArray(value)) return [];
+  let counter = 0;
+  return value
+    .filter(isRecord)
+    .map((item): WorkspaceDocument | null => {
+      const fileName =
+        typeof item.fileName === "string" && item.fileName.trim()
+          ? item.fileName.trim()
+          : null;
+      const text = typeof item.text === "string" ? item.text : null;
+      if (!fileName || text === null) return null;
+      return {
+        id:
+          typeof item.id === "string" && item.id
+            ? item.id
+            : `restored-${++counter}`,
+        fileName,
+        docType: isDocType(item.docType) ? item.docType : "cv",
+        customLabel:
+          typeof item.customLabel === "string" ? item.customLabel : "",
+        text,
+        chars: typeof item.chars === "number" ? item.chars : text.length,
+        uploadedAt:
+          typeof item.uploadedAt === "string" ? item.uploadedAt : "",
+      };
+    })
+    .filter((item): item is WorkspaceDocument => item !== null);
 }
 
 function isStepStatus(value: unknown): value is WorkspaceStepStatus {
@@ -297,6 +340,7 @@ function restoreWorkspaceState(input: unknown): WorkspaceState {
     insights: (input.insights as WorkspaceInsights | null) ?? null,
     finalDrafts: (input.finalDrafts as WorkspaceFinalDrafts | null) ?? null,
 
+    documents: restoreDocuments(input.documents),
     uploadedFiles: asStringArray(input.uploadedFiles),
     jobUrl: typeof input.jobUrl === "string" ? input.jobUrl : "",
     jobText: typeof input.jobText === "string" ? input.jobText : "",
@@ -597,6 +641,13 @@ export default function WorkspaceProvider({
 
   const progress = useMemo(() => deriveProgress(state), [state]);
 
+  const setDocuments = useCallback((docs: WorkspaceDocument[]) => {
+    setState((current) => ({
+      ...current,
+      documents: docs,
+    }));
+  }, []);
+
   const setUploadedFiles = useCallback((files: string[]) => {
     setState((current) => ({
       ...current,
@@ -892,6 +943,7 @@ export default function WorkspaceProvider({
     () => ({
       state,
       progress,
+      setDocuments,
       setUploadedFiles,
       setJobInput,
       setCandidateProfile,
@@ -919,6 +971,7 @@ export default function WorkspaceProvider({
     [
       state,
       progress,
+      setDocuments,
       setUploadedFiles,
       setJobInput,
       setCandidateProfile,

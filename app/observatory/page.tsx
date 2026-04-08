@@ -34,6 +34,7 @@ type TailoringRun = {
   final_cv_text: string | null;
   final_cover_letter_text: string | null;
   degraded_reasons_json: string[] | null;
+  candidate_profile_json: JsonObject | null;
   required_profile_json: JsonObject | null;
   selected_evidence_json: JsonObject | null;
   positioning_brief_json: JsonObject | null;
@@ -156,7 +157,14 @@ function formatRunDate(iso: string | null): string {
 
 function formatRunLabel(run: TailoringRun): string {
   const shortId = (run.client_run_id || run.id).slice(0, 8);
-  return `${shortId} · ${formatRunDate(run.created_at)}`;
+  const inputBadge = run.input_type === "url" ? "[URL]" : run.input_type === "text" ? "[TEXT]" : "";
+  const jobObj = asObject(run.structured_job_json);
+  const company = typeof jobObj?.companyName === "string" && jobObj.companyName ? jobObj.companyName : null;
+  const title = typeof jobObj?.jobTitle === "string" && jobObj.jobTitle ? jobObj.jobTitle : null;
+  const jobLabel = company && title ? `${company} · ${title}` : company ?? title ?? "";
+  return [inputBadge, shortId, formatRunDate(run.created_at), jobLabel]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function liveRunToDisplay(run: TailoringRun): DisplayRun {
@@ -243,7 +251,7 @@ function buildLayerTrace(run: TailoringRun | null, layerId: LayerConfig["id"]): 
           inputType: run?.input_type ?? null,
         },
         signals,
-        output: null,
+        output: run?.candidate_profile_json ?? null,
       };
 
     case "structuredJob":
@@ -335,7 +343,23 @@ function buildLayerTrace(run: TailoringRun | null, layerId: LayerConfig["id"]): 
           recommendation: run?.application_recommendation_json ?? null,
         },
         signals,
-        output: null,
+        output:
+          run?.candidate_profile_json ||
+          run?.required_profile_json ||
+          run?.selected_evidence_json ||
+          run?.positioning_brief_json ||
+          run?.application_recommendation_json
+            ? {
+                candidateProfile: run?.candidate_profile_json ?? null,
+                requiredProfile: run?.required_profile_json ?? null,
+                selectedEvidence: run?.selected_evidence_json ?? null,
+                positioningBrief: run?.positioning_brief_json ?? null,
+                companyContext: run?.company_context_json ?? null,
+                companyResearch: run?.company_research_json ?? null,
+                marketSignals: run?.market_signals_json ?? null,
+                recommendation: run?.application_recommendation_json ?? null,
+              }
+            : null,
       };
 
     case "documentGeneration":
@@ -499,9 +523,46 @@ function SummaryField({
   );
 }
 
+function inputTypeBadge(inputType: string | null, jobUrl: string | null): React.ReactNode {
+  if (inputType === "url" || jobUrl) {
+    return <span style={{ ...stripBadgeStyle, background: "#dbeafe", color: "#1e40af" }}>URL</span>;
+  }
+  if (inputType === "text") {
+    return <span style={{ ...stripBadgeStyle, background: "#f3e8ff", color: "#6b21a8" }}>Text</span>;
+  }
+  return <span style={{ color: t.colors.textMuted }}>—</span>;
+}
+
+function extractionSourceBadge(source: string | null): React.ReactNode {
+  if (!source) return <span style={{ color: t.colors.textMuted }}>—</span>;
+  const map: Record<string, { bg: string; color: string }> = {
+    "direct-fetch": { bg: "#dcfce7", color: "#166534" },
+    "readable-fallback": { bg: "#fef9c3", color: "#854d0e" },
+    "direct-fetch+user-text-fallback": { bg: "#dbeafe", color: "#1e40af" },
+    "readable-fallback+user-text-fallback": { bg: "#fef9c3", color: "#854d0e" },
+    "pasted-text": { bg: "#f3e8ff", color: "#6b21a8" },
+    "blocked-or-thin-content": { bg: "#fee2e2", color: "#991b1b" },
+  };
+  const style = map[source] ?? { bg: t.colors.backgroundSoft, color: t.colors.textSecondary };
+  return <span style={{ ...stripBadgeStyle, background: style.bg, color: style.color }}>{source}</span>;
+}
+
+function recommendationBadge(rec: unknown): React.ReactNode {
+  if (typeof rec !== "string" || !rec) return <span style={{ color: t.colors.textMuted }}>—</span>;
+  const map: Record<string, { bg: string; color: string }> = {
+    apply_confidently: { bg: "#dcfce7", color: "#166534" },
+    apply_with_care: { bg: "#fef9c3", color: "#854d0e" },
+    borderline: { bg: "#ffedd5", color: "#9a3412" },
+    not_recommended: { bg: "#fee2e2", color: "#991b1b" },
+  };
+  const style = map[rec] ?? { bg: t.colors.backgroundSoft, color: t.colors.textSecondary };
+  return <span style={{ ...stripBadgeStyle, background: style.bg, color: style.color }}>{rec.replace(/_/g, " ")}</span>;
+}
+
 function RunSummaryPanel({ run }: { run: DisplayRun }) {
+  const raw = run.raw;
   const durationValue = useMemo(() => {
-    const durations = getStageDurations(run.raw);
+    const durations = getStageDurations(raw);
     if (!durations) return "—";
     const total =
       durations.total ??
@@ -510,15 +571,32 @@ function RunSummaryPanel({ run }: { run: DisplayRun }) {
       durations.pipelineTotal ??
       durations.pipeline_total;
     return formatDuration(total);
-  }, [run.raw]);
+  }, [raw]);
+
+  const jobObj = asObject(raw?.structured_job_json);
+  const recObj = asObject(raw?.application_recommendation_json);
+  const companyName = typeof jobObj?.companyName === "string" ? jobObj.companyName || "—" : "—";
+  const jobTitle = typeof jobObj?.jobTitle === "string" ? jobObj.jobTitle || "—" : "—";
+  const outputLang = raw?.output_language ?? "—";
+  const recommendation = recObj?.applicationRecommendation ?? null;
+  const riskAreasCount = Array.isArray(recObj?.riskAreas) ? (recObj.riskAreas as unknown[]).length : "—";
+  const strongMatchesCount = Array.isArray(recObj?.strongMatches) ? (recObj.strongMatches as unknown[]).length : "—";
 
   return (
     <div style={summaryPanelStyle}>
       <div style={summaryTitleStyle}>Run summary</div>
       <div style={summaryGridStyle}>
-        <SummaryField label="Started at" value={formatRunDate(run.createdAt)} />
-        <SummaryField label="Finished at" value={formatRunDate(run.updatedAt)} />
-        <SummaryField label="Total duration" value={durationValue} />
+        <SummaryField label="Run ID" value={<span style={{ fontFamily: "monospace", fontSize: 12 }}>{(run.clientRunId ?? run.id).slice(0, 8)}</span>} />
+        <SummaryField label="Created" value={formatRunDate(run.createdAt)} />
+        <SummaryField label="Input type" value={inputTypeBadge(raw?.input_type ?? null, raw?.job_url ?? null)} />
+        <SummaryField label="Job URL" value={raw?.job_url ? <span style={{ fontSize: 12, color: t.colors.textSecondary, wordBreak: "break-all" }}>{raw.job_url.slice(0, 60)}{raw.job_url.length > 60 ? "…" : ""}</span> : <span style={{ color: t.colors.textMuted }}>None</span>} />
+        <SummaryField label="Extraction source" value={extractionSourceBadge(raw?.extraction_source ?? null)} />
+        <SummaryField label="Company" value={companyName} />
+        <SummaryField label="Job title" value={jobTitle} />
+        <SummaryField label="Language" value={<span style={{ ...stripBadgeStyle, background: t.colors.backgroundSoft, color: t.colors.textSecondary }}>{outputLang.toUpperCase()}</span>} />
+        <SummaryField label="Recommendation" value={recommendationBadge(recommendation)} />
+        <SummaryField label="Risk areas" value={typeof riskAreasCount === "number" && riskAreasCount > 0 ? <span style={warnValueStyle}>{riskAreasCount}</span> : <span style={{ color: t.colors.textMuted }}>{riskAreasCount}</span>} />
+        <SummaryField label="Strong matches" value={typeof strongMatchesCount === "number" && strongMatchesCount > 0 ? <span style={okValueStyle}>{strongMatchesCount}</span> : <span style={{ color: t.colors.textMuted }}>{strongMatchesCount}</span>} />
         <SummaryField
           label="Warnings"
           value={
@@ -529,6 +607,7 @@ function RunSummaryPanel({ run }: { run: DisplayRun }) {
             )
           }
         />
+        <SummaryField label="Duration" value={durationValue} />
         <div style={summaryFieldStyle}>
           <span style={summaryFieldLabelStyle}>Fallback / degraded</span>
           {run.degradedReasons.length > 0 ? (
@@ -543,16 +622,6 @@ function RunSummaryPanel({ run }: { run: DisplayRun }) {
             <span style={okValueStyle}>None</span>
           )}
         </div>
-        <SummaryField
-          label="Data source"
-          value={
-            run.source === "live" ? (
-              <span style={okValueStyle}>Live</span>
-            ) : (
-              <span style={{ color: t.colors.textMuted }}>Mock</span>
-            )
-          }
-        />
       </div>
     </div>
   );
@@ -1118,6 +1187,14 @@ const fallbackChipStyle: CSSProperties = {
   background: t.colors.warning,
   padding: "2px 8px",
   borderRadius: 999,
+};
+
+const stripBadgeStyle: CSSProperties = {
+  display: "inline-block",
+  padding: "2px 8px",
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
 };
 
 const bodyStyle: CSSProperties = {

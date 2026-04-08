@@ -82,6 +82,16 @@ type SelectedEvidencePack = {
   combinedTopEvidence: string[];
 };
 
+type ApplicationStrategy = {
+  cvLeadEvidence: string[];
+  coverLetterOpeningAngle: string;
+  gapHandling: string[];
+  confidenceLevel: "confident" | "assured" | "careful";
+  toneGuidance: string[];
+  priorityThemes: string[];
+  doNotOverclaim: string[];
+};
+
 type PositioningBriefPack = {
   positioningStrength: "measured" | "solid" | "strong";
   positioningTone: "specialist" | "senior_specialist" | "leadership_adjacent";
@@ -90,6 +100,7 @@ type PositioningBriefPack = {
   positioningStrategy: string;
   coverLetterAngle: string;
   cvEmphasis: string[];
+  applicationStrategy: ApplicationStrategy;
 };
 
 type RecommendationPack = {
@@ -145,9 +156,11 @@ type WorkspaceJobProfile = {
   extractedText?: string;
   extractionSource?:
     | "pasted-text"
-    | "direct"
+    | "direct-fetch"
     | "readable-fallback"
-    | "blocked-or-thin-content";
+    | "blocked-or-thin-content"
+    | "direct-fetch+user-text-fallback"
+    | "readable-fallback+user-text-fallback";
   normalizedUrl?: string;
   warnings?: string[];
   outputLanguage?: "de" | "en" | "es";
@@ -1283,6 +1296,53 @@ function buildPositioningBriefPack(
     ...selectedEvidence.supportEvidence.slice(0, 2),
   ]).slice(0, 5);
 
+  const confidenceLevel: ApplicationStrategy["confidenceLevel"] =
+    positioningStrength === "strong"
+      ? "confident"
+      : positioningStrength === "solid"
+        ? "assured"
+        : "careful";
+
+  const toneGuidance: string[] = [
+    positioningTone === "leadership_adjacent"
+      ? "Write in a confident, senior tone — ownership and cross-functional coordination evident."
+      : positioningTone === "senior_specialist"
+        ? "Write in a capable, experienced tone — deep functional expertise is the anchor."
+        : "Write in a grounded specialist tone — practical delivery and hands-on capability.",
+    positioningStrength === "strong"
+      ? "Assert fit confidently where direct evidence supports it."
+      : positioningStrength === "solid"
+        ? "Position honestly — name gaps where they exist without undermining the application."
+        : "Position carefully — acknowledge gaps clearly and frame adjacent evidence as adjacent.",
+  ];
+
+  const applicationStrategy: ApplicationStrategy = {
+    cvLeadEvidence: dedupeStrings([
+      ...selectedEvidence.strongEvidence.slice(0, 3),
+      ...selectedEvidence.supportEvidence.slice(0, 2),
+    ]).slice(0, 5),
+    coverLetterOpeningAngle:
+      selectedEvidence.strongEvidence.length > 0
+        ? `Open with the strongest direct evidence of role fit: ${selectedEvidence.strongEvidence[0]}`
+        : "Open by establishing credible relevance to the core role requirements.",
+    gapHandling: missingSignals.slice(0, 3).map(
+      (s) => `Acknowledge gap in "${s}" honestly without overstating its impact.`,
+    ),
+    confidenceLevel,
+    toneGuidance: toneGuidance.slice(0, 4),
+    priorityThemes: (coreWhyFit.slice(0, 3).length > 0
+      ? coreWhyFit.slice(0, 3)
+      : dedupeStrings([
+          ...selectedEvidence.strongEvidence.slice(0, 2),
+          ...selectedEvidence.supportEvidence.slice(0, 1),
+        ])
+    ).slice(0, 3),
+    doNotOverclaim: (positioningRisks.slice(0, 4).length > 0
+      ? positioningRisks.slice(0, 4)
+      : missingSignals.slice(0, 4)
+    ).slice(0, 4),
+  };
+
   return {
     positioningStrength,
     positioningTone,
@@ -1291,6 +1351,7 @@ function buildPositioningBriefPack(
     positioningStrategy,
     coverLetterAngle,
     cvEmphasis,
+    applicationStrategy,
   };
 }
 
@@ -1302,6 +1363,34 @@ function mapAiPositioningToInternal(
 
   const strength = asString(ai.positioningStrength);
   const tone = asString(ai.positioningTone);
+
+  const aiStrategy = ai.applicationStrategy as Record<string, unknown> | null | undefined;
+
+  const cleanArray = (raw: unknown, cap: number): string[] =>
+    asStringArray(raw).map((s) => s.trim()).filter(Boolean).slice(0, cap);
+
+  const confidenceRaw = asString(aiStrategy?.confidenceLevel);
+  const mappedConfidence: ApplicationStrategy["confidenceLevel"] =
+    confidenceRaw === "confident" || confidenceRaw === "assured" || confidenceRaw === "careful"
+      ? confidenceRaw
+      : fallback.applicationStrategy.confidenceLevel;
+
+  const aiCvLeadEvidence = cleanArray(aiStrategy?.cvLeadEvidence, 5);
+  const aiGapHandling = cleanArray(aiStrategy?.gapHandling, 3);
+  const aiToneGuidance = cleanArray(aiStrategy?.toneGuidance, 4);
+  const aiPriorityThemes = cleanArray(aiStrategy?.priorityThemes, 3);
+  const aiDoNotOverclaim = cleanArray(aiStrategy?.doNotOverclaim, 4);
+
+  const applicationStrategy: ApplicationStrategy = {
+    cvLeadEvidence: aiCvLeadEvidence.length > 0 ? aiCvLeadEvidence : fallback.applicationStrategy.cvLeadEvidence,
+    coverLetterOpeningAngle:
+      asString(aiStrategy?.coverLetterOpeningAngle)?.trim() || fallback.applicationStrategy.coverLetterOpeningAngle,
+    gapHandling: aiGapHandling.length > 0 ? aiGapHandling : fallback.applicationStrategy.gapHandling,
+    confidenceLevel: mappedConfidence,
+    toneGuidance: aiToneGuidance.length > 0 ? aiToneGuidance : fallback.applicationStrategy.toneGuidance,
+    priorityThemes: aiPriorityThemes.length > 0 ? aiPriorityThemes : fallback.applicationStrategy.priorityThemes,
+    doNotOverclaim: aiDoNotOverclaim.length > 0 ? aiDoNotOverclaim : fallback.applicationStrategy.doNotOverclaim,
+  };
 
   return {
     positioningStrength:
@@ -1320,6 +1409,7 @@ function mapAiPositioningToInternal(
       asString(ai.positioningStrategy) ?? fallback.positioningStrategy,
     coverLetterAngle: asString(ai.coverLetterAngle) ?? fallback.coverLetterAngle,
     cvEmphasis: asStringArray(ai.cvEmphasis).slice(0, 6),
+    applicationStrategy,
   };
 }
 
@@ -1966,7 +2056,7 @@ export async function runTailoringPipeline({
     extractedText,
     extractionSource:
       (asString(extractData.source) as WorkspaceJobProfile["extractionSource"]) ??
-      "pasted-text",
+      (normalizedJobUrl ? "direct-fetch" : "pasted-text"),
     normalizedUrl: asString(extractData.normalizedUrl) ?? normalizedJobUrl,
     warnings: asStringArray(extractData.warnings),
     outputLanguage: normalizedOutputLanguage,
@@ -2355,6 +2445,15 @@ export async function runTailoringPipeline({
     positioningStrategy: "",
     coverLetterAngle: "",
     cvEmphasis: [],
+    applicationStrategy: {
+      cvLeadEvidence: [],
+      coverLetterOpeningAngle: "",
+      gapHandling: [],
+      confidenceLevel: "careful",
+      toneGuidance: [],
+      priorityThemes: [],
+      doNotOverclaim: [],
+    },
   };
 
   if (ENGINE_SWITCHES.LAYER_8_POSITIONING) {
@@ -2640,6 +2739,7 @@ export async function runTailoringPipeline({
           normalizedOutputLanguage,
           "Strong polished professional",
           languageContext || null,
+          positioningBrief.applicationStrategy,
         ),
         JSON.stringify(
           {
@@ -2673,6 +2773,7 @@ export async function runTailoringPipeline({
             normalizedOutputLanguage,
             "Strong polished professional",
             languageContext || null,
+            positioningBrief.applicationStrategy,
           ),
           JSON.stringify(
             {
