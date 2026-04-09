@@ -1,4 +1,5 @@
 import "@/app/globals.css";
+import { Analytics } from "@vercel/analytics/react";
 import CookieBanner from "@/components/CookieBanner";
 import Footer from "@/components/layout/Footer";
 
@@ -13,6 +14,7 @@ export default function RootLayout({
         {children}
         <CookieBanner />
         <Footer />
+        <Analytics />
       </body>
     </html>
   );
