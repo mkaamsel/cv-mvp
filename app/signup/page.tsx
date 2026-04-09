@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { designTokens } from "@/lib/design/tokens";
+import { LEGAL_VERSIONS } from "@/lib/legal/versions";
 
 const t = designTokens;
 
@@ -25,17 +26,14 @@ export default function SignupPage(): React.JSX.Element {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  // Granular consent state
-  const [consentTerms, setConsentTerms] = useState(false);
-  const [consentPrivacy, setConsentPrivacy] = useState(false);
-  const [consentStorage, setConsentStorage] = useState(false);
+  const [consentProcessing, setConsentProcessing] = useState(false);
   const [consentImprovement, setConsentImprovement] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const requiredConsentsGiven = consentTerms && consentPrivacy && consentStorage;
+  const requiredConsentsGiven = consentProcessing;
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
@@ -72,12 +70,15 @@ export default function SignupPage(): React.JSX.Element {
         email: normalizedEmail,
         password,
         options: {
+          emailRedirectTo:
+            typeof window !== "undefined"
+              ? `${window.location.origin}/login?verified=1`
+              : undefined,
           data: {
-            consent_terms: consentTerms,
-            consent_privacy: consentPrivacy,
-            consent_storage: consentStorage,
+            consent_processing_docs: consentProcessing,
             consent_improvement: consentImprovement,
-            consent_recorded_at: new Date().toISOString(),
+            consent_timestamp: new Date().toISOString(),
+            privacy_version: LEGAL_VERSIONS.privacy,
           },
         },
       });
@@ -230,7 +231,7 @@ export default function SignupPage(): React.JSX.Element {
               </button>
             </div>
 
-            {/* Granular consent checkboxes */}
+            {/* Beta release consent checkboxes */}
             <div
               style={{
                 display: "grid",
@@ -256,39 +257,17 @@ export default function SignupPage(): React.JSX.Element {
               </div>
 
               <ConsentCheckbox
-                id="consent-terms"
-                checked={consentTerms}
-                onChange={setConsentTerms}
+                id="consent-processing"
+                checked={consentProcessing}
+                onChange={setConsentProcessing}
                 required
               >
-                I agree to the{" "}
-                <Link href="/terms" target="_blank" style={linkStyle}>
-                  Terms of Service
-                </Link>{" "}
-                <RequiredBadge />
-              </ConsentCheckbox>
-
-              <ConsentCheckbox
-                id="consent-privacy"
-                checked={consentPrivacy}
-                onChange={setConsentPrivacy}
-                required
-              >
-                I agree to the{" "}
+                I agree to the Privacy Policy and consent to the processing of
+                my uploaded documents for the purpose of generating job
+                application materials.{" "}
                 <Link href="/privacy" target="_blank" style={linkStyle}>
                   Privacy Policy
                 </Link>{" "}
-                <RequiredBadge />
-              </ConsentCheckbox>
-
-              <ConsentCheckbox
-                id="consent-storage"
-                checked={consentStorage}
-                onChange={setConsentStorage}
-                required
-              >
-                I consent to my profile and application data being stored and
-                used to generate tailored documents{" "}
                 <RequiredBadge />
               </ConsentCheckbox>
 

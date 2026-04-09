@@ -11,6 +11,8 @@ type TailoringRequest = {
   url?: string;
   jobDescriptionText?: string;
   jobDescription?: string;
+  candidateClarificationsText?: string;
+  candidateClarifications?: Record<string, unknown> | null;
   outputLanguage?: "en" | "de" | string;
   candidateProfile?: Record<string, unknown> | null;
 };
@@ -132,10 +134,14 @@ export async function POST(req: NextRequest) {
     const jobUrl = asString(body.jobUrl) ?? asString(body.url) ?? "";
     const jobDescriptionText =
       asString(body.jobDescriptionText) ?? asString(body.jobDescription) ?? "";
+    const candidateClarificationsText =
+      asString(body.candidateClarificationsText) ?? "";
 
     console.log("[/api/tailoring] body parsed:", {
       hasJobUrl: Boolean(jobUrl),
       jobDescriptionTextLength: jobDescriptionText.length,
+      candidateClarificationsTextLength: candidateClarificationsText.length,
+      candidateClarificationKeys: Object.keys(asRecord(body.candidateClarifications) ?? {}).length,
       outputLanguage: body.outputLanguage,
       hasCandidateProfile: Boolean(body.candidateProfile),
     });
@@ -145,6 +151,8 @@ export async function POST(req: NextRequest) {
       cookieHeader: req.headers.get("cookie") ?? "",
       jobUrl,
       jobDescriptionText,
+      candidateClarificationsText,
+      candidateClarifications: asRecord(body.candidateClarifications),
       outputLanguage: body.outputLanguage,
       candidateProfile: asRecord(body.candidateProfile),
     });

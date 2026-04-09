@@ -9,6 +9,7 @@ type LoadProfileSuccess = {
   ok: true;
   workspace: {
     profile: unknown;
+    capabilityInventory?: unknown;
     documents: unknown[];
     meta: Record<string, unknown>;
     createdAt: string | null;
@@ -64,6 +65,7 @@ export async function GET(): Promise<Response> {
       workspace: workspace
         ? {
             profile: workspace.profile ?? null,
+            capabilityInventory: workspace.capabilityInventory ?? null,
             documents: Array.isArray(workspace.documents) ? workspace.documents : [],
             meta:
               workspace.meta &&

@@ -5,7 +5,7 @@ import {
   clampText,
   guardUploadedFile,
   normalizeWhitespace,
-} from "@/lib/intelligence/core/routeGuards";
+} from "@/lib/engine/core/routeGuards";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

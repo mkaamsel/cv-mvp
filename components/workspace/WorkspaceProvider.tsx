@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  WorkspaceClarificationUpdateStatus,
+  WorkspaceCandidateCapabilityInventory,
   WorkspaceCandidateProfile,
   WorkspaceDocument,
   WorkspaceDocumentType,
@@ -37,9 +39,21 @@ type WorkspaceContextValue = {
   setJobInput: (payload: { jobUrl?: string; jobText?: string }) => void;
 
   setCandidateProfile: (profile: WorkspaceCandidateProfile | null) => void;
+  setCapabilityInventory: (
+    capabilityInventory: WorkspaceCandidateCapabilityInventory | null,
+  ) => void;
   setJobProfile: (job: WorkspaceJobProfile | null) => void;
   setInsights: (insights: WorkspaceInsights | null) => void;
   setFinalDrafts: (drafts: WorkspaceFinalDrafts | null) => void;
+  setRecommendationClarifications: (
+    clarifications: Record<string, string>,
+  ) => void;
+  setClarificationUpdateState: (patch: {
+    status?: WorkspaceClarificationUpdateStatus;
+    error?: string | null;
+    startedAt?: string | null;
+  }) => void;
+  setFinalDraftPreference: (preference: "latest" | "original") => void;
 
   setProfileStatus: (status: WorkspaceStepStatus) => void;
   setJobStatus: (status: WorkspaceStepStatus) => void;
@@ -87,6 +101,7 @@ type ProfileLoadResponse =
       ok: true;
       workspace: {
         profile: unknown;
+        capabilityInventory?: unknown;
         documents: unknown[];
         meta: Record<string, unknown>;
         createdAt: string | null;
@@ -143,9 +158,16 @@ function createEmptyTelemetry(): WorkspaceRunTelemetry {
 
 const initialState: WorkspaceState = {
   candidateProfile: null,
+  capabilityInventory: null,
   jobProfile: null,
   insights: null,
   finalDrafts: null,
+  originalFinalDrafts: null,
+  recommendationClarifications: {},
+  clarificationUpdateStatus: "idle",
+  clarificationUpdateError: null,
+  clarificationUpdateStartedAt: null,
+  finalDraftPreference: "latest",
 
   documents: [],
   uploadedFiles: [],
@@ -336,9 +358,41 @@ function restoreWorkspaceState(input: unknown): WorkspaceState {
   return {
     candidateProfile:
       (input.candidateProfile as WorkspaceCandidateProfile | null) ?? null,
+    capabilityInventory:
+      (input.capabilityInventory as WorkspaceCandidateCapabilityInventory | null) ??
+      null,
     jobProfile: (input.jobProfile as WorkspaceJobProfile | null) ?? null,
     insights: (input.insights as WorkspaceInsights | null) ?? null,
     finalDrafts: (input.finalDrafts as WorkspaceFinalDrafts | null) ?? null,
+    originalFinalDrafts:
+      (input.originalFinalDrafts as WorkspaceFinalDrafts | null) ?? null,
+    recommendationClarifications: isRecord(input.recommendationClarifications)
+      ? Object.entries(input.recommendationClarifications).reduce<
+          Record<string, string>
+        >((acc, [key, value]) => {
+          if (typeof value === "string") {
+            acc[key] = value;
+          }
+          return acc;
+        }, {})
+      : {},
+    clarificationUpdateStatus:
+      input.clarificationUpdateStatus === "saving_clarifications" ||
+      input.clarificationUpdateStatus === "rerunning" ||
+      input.clarificationUpdateStatus === "rerun_succeeded" ||
+      input.clarificationUpdateStatus === "rerun_failed"
+        ? input.clarificationUpdateStatus
+        : "idle",
+    clarificationUpdateError:
+      typeof input.clarificationUpdateError === "string"
+        ? input.clarificationUpdateError
+        : null,
+    clarificationUpdateStartedAt:
+      typeof input.clarificationUpdateStartedAt === "string"
+        ? input.clarificationUpdateStartedAt
+        : null,
+    finalDraftPreference:
+      input.finalDraftPreference === "original" ? "original" : "latest",
 
     documents: restoreDocuments(input.documents),
     uploadedFiles: asStringArray(input.uploadedFiles),
@@ -400,6 +454,16 @@ function normalizeLoadedProfile(
   }
 
   return value as WorkspaceCandidateProfile;
+}
+
+function normalizeLoadedCapabilityInventory(
+  value: unknown,
+): WorkspaceCandidateCapabilityInventory | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return value as WorkspaceCandidateCapabilityInventory;
 }
 
 function normalizeLoadedDocuments(value: unknown): string[] {
@@ -485,10 +549,13 @@ function normalizeLoadedWorkspaceDocuments(value: unknown): WorkspaceDocument[] 
 function mergeLoadedWorkspace(
   current: WorkspaceState,
   loadedProfile: WorkspaceCandidateProfile | null,
+  loadedCapabilityInventory: WorkspaceCandidateCapabilityInventory | null,
   loadedFiles: string[],
   loadedDocuments: WorkspaceDocument[],
 ): WorkspaceState {
   const shouldUseLoadedProfile = !current.candidateProfile && loadedProfile;
+  const shouldUseLoadedCapabilityInventory =
+    !current.capabilityInventory && loadedCapabilityInventory;
   const mergedFiles =
     current.uploadedFiles.length > 0 ? current.uploadedFiles : loadedFiles;
   // Only restore from DB if sessionStorage did not already have documents.
@@ -501,6 +568,9 @@ function mergeLoadedWorkspace(
     candidateProfile: shouldUseLoadedProfile
       ? loadedProfile
       : current.candidateProfile,
+    capabilityInventory: shouldUseLoadedCapabilityInventory
+      ? loadedCapabilityInventory
+      : current.capabilityInventory,
     uploadedFiles: mergedFiles,
     documents: mergedDocuments,
     profileStatus:
@@ -665,6 +735,9 @@ export default function WorkspaceProvider({
         const loadedProfile = normalizeLoadedProfile(
           data.workspace?.profile ?? null,
         );
+        const loadedCapabilityInventory = normalizeLoadedCapabilityInventory(
+          data.workspace?.capabilityInventory ?? null,
+        );
         const loadedFiles = normalizeLoadedDocuments(
           data.workspace?.documents ?? [],
         );
@@ -675,7 +748,13 @@ export default function WorkspaceProvider({
         if (cancelled) return;
 
         setState((current) =>
-          mergeLoadedWorkspace(current, loadedProfile, loadedFiles, loadedDocuments),
+          mergeLoadedWorkspace(
+            current,
+            loadedProfile,
+            loadedCapabilityInventory,
+            loadedFiles,
+            loadedDocuments,
+          ),
         );
       } catch {
         if (cancelled) return;
@@ -732,9 +811,16 @@ export default function WorkspaceProvider({
         ...(profile
           ? {}
           : {
+              capabilityInventory: null,
               jobProfile: null,
               insights: null,
               finalDrafts: null,
+              originalFinalDrafts: null,
+              recommendationClarifications: {},
+              clarificationUpdateStatus: "idle",
+              clarificationUpdateError: null,
+              clarificationUpdateStartedAt: null,
+              finalDraftPreference: "latest",
               jobStatus: "idle" as const,
               insightsStatus: "idle" as const,
               finalStatus: "idle" as const,
@@ -742,6 +828,16 @@ export default function WorkspaceProvider({
               insightsError: null,
               finalError: null,
             }),
+      }));
+    },
+    [],
+  );
+
+  const setCapabilityInventory = useCallback(
+    (capabilityInventory: WorkspaceCandidateCapabilityInventory | null) => {
+      setState((current) => ({
+        ...current,
+        capabilityInventory,
       }));
     },
     [],
@@ -786,10 +882,61 @@ export default function WorkspaceProvider({
     setState((current) => ({
       ...current,
       finalDrafts: drafts,
+      originalFinalDrafts: drafts
+        ? current.originalFinalDrafts ?? drafts
+        : null,
+      finalDraftPreference: drafts ? current.finalDraftPreference : "latest",
+      clarificationUpdateStatus: drafts
+        ? current.clarificationUpdateStatus
+        : "idle",
+      clarificationUpdateError: drafts ? current.clarificationUpdateError : null,
+      clarificationUpdateStartedAt: drafts
+        ? current.clarificationUpdateStartedAt
+        : null,
       finalStatus: drafts ? "ready" : "idle",
       finalError: null,
     }));
   }, []);
+
+  const setRecommendationClarifications = useCallback(
+    (clarifications: Record<string, string>) => {
+      setState((current) => ({
+        ...current,
+        recommendationClarifications: clarifications,
+      }));
+    },
+    [],
+  );
+
+  const setClarificationUpdateState = useCallback(
+    (patch: {
+      status?: WorkspaceClarificationUpdateStatus;
+      error?: string | null;
+      startedAt?: string | null;
+    }) => {
+      setState((current) => ({
+        ...current,
+        clarificationUpdateStatus: patch.status ?? current.clarificationUpdateStatus,
+        clarificationUpdateError:
+          patch.error !== undefined ? patch.error : current.clarificationUpdateError,
+        clarificationUpdateStartedAt:
+          patch.startedAt !== undefined
+            ? patch.startedAt
+            : current.clarificationUpdateStartedAt,
+      }));
+    },
+    [],
+  );
+
+  const setFinalDraftPreference = useCallback(
+    (preference: "latest" | "original") => {
+      setState((current) => ({
+        ...current,
+        finalDraftPreference: preference,
+      }));
+    },
+    [],
+  );
 
   const setProfileStatus = useCallback((status: WorkspaceStepStatus) => {
     setState((current) => ({
@@ -1002,9 +1149,13 @@ export default function WorkspaceProvider({
       setUploadedFiles,
       setJobInput,
       setCandidateProfile,
+      setCapabilityInventory,
       setJobProfile,
       setInsights,
       setFinalDrafts,
+      setRecommendationClarifications,
+      setClarificationUpdateState,
+      setFinalDraftPreference,
       setProfileStatus,
       setJobStatus,
       setInsightsStatus,
@@ -1030,9 +1181,13 @@ export default function WorkspaceProvider({
       setUploadedFiles,
       setJobInput,
       setCandidateProfile,
+      setCapabilityInventory,
       setJobProfile,
       setInsights,
       setFinalDrafts,
+      setRecommendationClarifications,
+      setClarificationUpdateState,
+      setFinalDraftPreference,
       setProfileStatus,
       setJobStatus,
       setInsightsStatus,

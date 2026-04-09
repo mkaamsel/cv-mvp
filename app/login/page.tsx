@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { designTokens } from "@/lib/design/tokens";
 
 const t = designTokens;
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -27,6 +27,15 @@ export default function LoginPage() {
       return "/workspace/profile";
     }
     return next;
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (searchParams.get("verified") === "1") {
+      setSuccess("Email verified. You can now log in.");
+    }
+    if (searchParams.get("verify") === "required") {
+      setError("Please verify your email address before accessing the workspace.");
+    }
   }, [searchParams]);
 
   useEffect(() => {
@@ -407,7 +416,7 @@ export default function LoginPage() {
               }}
             >
               <Link
-                href="/reset-password"
+                href="/forgot-password"
                 style={{
                   color: t.colors.textOnPrimary,
                   fontWeight: 700,
@@ -442,6 +451,32 @@ export default function LoginPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+function LoginPageFallback() {
+  return (
+    <main
+      style={{
+        minHeight: "100vh",
+        background: t.colors.background,
+        display: "grid",
+        placeItems: "center",
+        padding: "40px 20px",
+        color: t.colors.textSecondary,
+        fontSize: 16,
+      }}
+    >
+      Loading...
+    </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginPageFallback />}>
+      <LoginPageContent />
+    </Suspense>
   );
 }
 

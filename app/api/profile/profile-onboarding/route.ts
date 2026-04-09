@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { normalizeArray } from "../../../lib/profile/onboarding";
+import { normalizeArray } from "@/lib/profile/onboarding";
 
 function mergeValue(existing: unknown, incoming: unknown) {
   if (Array.isArray(existing) || Array.isArray(incoming)) {

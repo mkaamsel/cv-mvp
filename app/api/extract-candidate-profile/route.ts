@@ -3,9 +3,13 @@ import OpenAI from "openai";
 import { withTimeout } from "@/lib/engine/core/withTimeout";
 import { buildExtractCandidateProfileInstructions } from "@/lib/prompts/Intelligence/extractCandidateProfilePrompt";
 import { buildCanonicalizeProfileInstructions } from "@/lib/prompts/canonicalizeProfilePrompt";
+import {
+  normalizeCandidateCapabilities,
+  type CandidateCapabilityInventory,
+} from "@/lib/profile/capabilityNormalization";
 import { detectInputLanguages, normalizeLang, resolveOutputLanguage } from "@/lib/profile/languageDetection";
 import type { SupportedLanguage } from "@/lib/profile/languageDetection";
-import type { CorrectionLogEntry } from "@/lib/profile/profile-store";
+import type { CandidateProfile, CorrectionLogEntry } from "@/lib/profile/profile-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -94,6 +98,8 @@ const MODEL_PRIORITY = [
 const MAX_DOCUMENTS = 12;
 const MAX_TEXT_PER_DOCUMENT = 18000;
 const MAX_TOTAL_TEXT = 60000;
+const CANONICALIZE_TIMEOUT_MS = 45000;
+const EXTRACT_TIMEOUT_MS = 120000;
 
 function normalizeOutputLanguage(value: unknown): SupportedLanguage {
   const lang = normalizeLang(typeof value === "string" ? value : null);
@@ -322,6 +328,291 @@ function sanitizeCandidateProfile(
   };
 }
 
+function asCandidateProfile(
+  profile: CandidateProfileResponse,
+): CandidateProfile {
+  return {
+    schemaVersion: typeof profile.schemaVersion === "number" ? profile.schemaVersion : 1,
+    fullName: profile.fullName ?? null,
+    headline: profile.headline ?? null,
+    summary: profile.summary ?? null,
+    roles: (profile.roles ?? []).map((role) => ({
+      title: role.title,
+      company: role.company ?? null,
+      startDate: role.startDate ?? null,
+      endDate: role.endDate ?? null,
+      isCurrent: Boolean(role.isCurrent),
+      location: role.location ?? null,
+      achievements: Array.isArray(role.achievements) ? role.achievements : [],
+    })),
+    coreSkills: profile.coreSkills ?? [],
+    tools: profile.tools ?? [],
+    standards: profile.standards ?? [],
+    industries: profile.industries ?? [],
+    languages: (profile.languages ?? []).map((item) => ({
+      language: item.language,
+      proficiency: item.proficiency ?? null,
+    })),
+    education: (profile.education ?? []).map((item) => ({
+      degree: item.degree,
+      field: item.field ?? null,
+      institution: item.institution ?? null,
+      endDate: item.endDate ?? null,
+    })),
+    certifications: (profile.certifications ?? []).map((item) => ({
+      name: item.name,
+      issuer: item.issuer ?? null,
+      date: item.date ?? null,
+    })),
+    leadershipSignals: profile.leadershipSignals ?? [],
+    strengths: profile.strengths ?? [],
+    constraints: profile.constraints ?? [],
+    verifiedClaims: (profile.verifiedClaims ?? []).map((item) => ({
+      claim: item.claim,
+      evidence: Array.isArray(item.evidence) ? item.evidence : [],
+      confidence: item.confidence,
+    })),
+    openQuestions: profile.openQuestions ?? [],
+    detectedInputLanguages: profile.detectedInputLanguages,
+    preferredOutputLanguage: profile.preferredOutputLanguage,
+  };
+}
+
+function normalizeForMatch(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isZeugnisKind(kind: unknown): boolean {
+  if (typeof kind !== "string") return false;
+  const normalizedKind = normalizeForMatch(kind);
+  return (
+    normalizedKind === "arbeitszeugnis" ||
+    normalizedKind === "reference" ||
+    normalizedKind.includes("zeugnis")
+  );
+}
+
+function yearFromDate(value: string | null): number | null {
+  if (!value) return null;
+  const match = value.match(/\b(19|20)\d{2}\b/);
+  return match ? Number.parseInt(match[0], 10) : null;
+}
+
+function yearsFromText(text: string): number[] {
+  const matches = text.match(/\b(19|20)\d{2}\b/g) ?? [];
+  return Array.from(new Set(matches.map((year) => Number.parseInt(year, 10))));
+}
+
+function hasNearYear(year: number | null, years: number[]): boolean {
+  if (!year) return false;
+  return years.some((candidate) => Math.abs(candidate - year) <= 1);
+}
+
+function hasCompanyAlignment(
+  role: NonNullable<CandidateProfileResponse["roles"]>[number],
+  normalizedDocText: string,
+): boolean {
+  const company = normalizeForMatch(role.company ?? "");
+  if (!company) return false;
+  return normalizedDocText.includes(company);
+}
+
+function hasTitleAlignment(
+  role: NonNullable<CandidateProfileResponse["roles"]>[number],
+  normalizedDocText: string,
+): boolean {
+  const titleTokens = normalizeForMatch(role.title)
+    .split(" ")
+    .filter((token) => token.length >= 4);
+  if (titleTokens.length === 0) return false;
+  const matched = titleTokens.filter((token) => normalizedDocText.includes(token)).length;
+  return matched >= Math.max(1, Math.ceil(titleTokens.length * 0.6));
+}
+
+function hasDateAlignment(
+  role: NonNullable<CandidateProfileResponse["roles"]>[number],
+  docText: string,
+): boolean {
+  const startYear = yearFromDate(role.startDate);
+  const endYear = yearFromDate(role.endDate);
+  const docYears = yearsFromText(docText);
+  if (docYears.length === 0) return false;
+  if (!startYear && !endYear) return false;
+  if (startYear && endYear) {
+    return hasNearYear(startYear, docYears) && hasNearYear(endYear, docYears);
+  }
+  return hasNearYear(startYear ?? endYear, docYears);
+}
+
+type RoleResponsibilityExtraction = {
+  additionalResponsibilities?: string[];
+};
+
+function cleanStringArrayUnlimited(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function extractAdditionalRoleResponsibilitiesFromZeugnis(input: {
+  role: NonNullable<CandidateProfileResponse["roles"]>[number];
+  existingResponsibilities: string[];
+  documentFileName: string;
+  documentText: string;
+}): Promise<string[]> {
+  const model = MODEL_PRIORITY[0] || "gpt-4.1-mini";
+  const instruction = [
+    "Extract only factual additional responsibilities for this exact role from the provided employment reference text.",
+    "Return only tasks/duties/responsibilities. Do not include praise, personality, or performance-evaluation wording.",
+    "Keep extraction language-agnostic and faithful to source facts.",
+    "Additive only: do not rewrite or remove existing responsibilities.",
+    "Return JSON only with key additionalResponsibilities.",
+  ].join(" ");
+
+  const response = await withTimeout(
+    openai.responses.create({
+      model,
+      input: [
+        {
+          role: "system",
+          content: [{ type: "input_text", text: instruction }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: JSON.stringify(
+                {
+                  role: {
+                    title: input.role.title,
+                    company: input.role.company,
+                    startDate: input.role.startDate,
+                    endDate: input.role.endDate,
+                  },
+                  existingResponsibilities: input.existingResponsibilities,
+                  sourceFileName: input.documentFileName,
+                  referenceText: clampText(input.documentText, 14000).text,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "role_responsibility_extraction",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              additionalResponsibilities: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+            required: ["additionalResponsibilities"],
+          },
+        },
+      },
+    }),
+    30000,
+  );
+
+  const parsed = JSON.parse(response.output_text) as RoleResponsibilityExtraction;
+  return cleanStringArrayUnlimited(parsed.additionalResponsibilities);
+}
+
+async function enrichRolesFromZeugnisse(
+  profile: CandidateProfileResponse,
+  documents: InputDocument[],
+): Promise<CandidateProfileResponse> {
+  if (!Array.isArray(profile.roles) || profile.roles.length === 0) return profile;
+
+  const zeugnisse = documents.filter(
+    (doc) =>
+      isZeugnisKind(doc.kind) &&
+      typeof doc.text === "string" &&
+      doc.text.trim().length > 0,
+  );
+  if (zeugnisse.length === 0) return profile;
+
+  const roles = profile.roles.map((role) => ({
+    ...role,
+    achievements: Array.isArray(role.achievements) ? [...role.achievements] : [],
+  }));
+
+  for (let roleIndex = 0; roleIndex < roles.length; roleIndex += 1) {
+    const role = roles[roleIndex];
+    for (const doc of zeugnisse) {
+      const docText = typeof doc.text === "string" ? doc.text : "";
+      const normalizedDoc = normalizeForMatch(docText);
+      const isMatch =
+        hasCompanyAlignment(role, normalizedDoc) &&
+        hasTitleAlignment(role, normalizedDoc) &&
+        hasDateAlignment(role, docText);
+
+      if (!isMatch) continue;
+
+      const beforeCount = role.achievements.length;
+      const existing = new Set(role.achievements.map((item) => normalizeForMatch(item)));
+      let additions: string[] = [];
+      try {
+        additions = await extractAdditionalRoleResponsibilitiesFromZeugnis({
+          role,
+          existingResponsibilities: role.achievements,
+          documentFileName: doc.fileName ?? "(unnamed)",
+          documentText: docText,
+        });
+      } catch (error) {
+        console.warn("[role-enrichment] extraction failed for match:", {
+          roleIndex,
+          roleTitle: role.title,
+          sourceFileName: doc.fileName ?? "(unnamed)",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+
+      let addedCount = 0;
+      for (const addition of additions) {
+        const key = normalizeForMatch(addition);
+        if (!key || existing.has(key)) continue;
+        existing.add(key);
+        role.achievements.push(addition);
+        addedCount += 1;
+      }
+
+      console.log("[role-enrichment] matched role pair:", {
+        roleIndex,
+        roleTitle: role.title,
+        roleCompany: role.company,
+        sourceFileName: doc.fileName ?? "(unnamed)",
+      });
+      console.log("[role-enrichment] responsibility enrichment:", {
+        roleIndex,
+        roleTitle: role.title,
+        beforeResponsibilities: beforeCount,
+        addedFromZeugnis: addedCount,
+        afterResponsibilities: role.achievements.length,
+      });
+    }
+  }
+
+  return { ...profile, roles };
+}
+
 /**
  * Re-apply user corrections from correctionLog onto a freshly extracted profile.
  * This is the net add rule: AI re-extraction never overwrites user corrections.
@@ -330,7 +621,7 @@ function reapplyUserCorrections(
   profile: CandidateProfileResponse,
   correctionLog: CorrectionLogEntry[],
 ): CandidateProfileResponse {
-  let p = { ...profile };
+  const p = { ...profile };
 
   for (const entry of correctionLog) {
     try {
@@ -546,7 +837,7 @@ async function mergeAndCanonicalizeEnrichment(
           },
         },
       }),
-      20000,
+      CANONICALIZE_TIMEOUT_MS,
     );
 
     type CanonResult = {
@@ -746,7 +1037,7 @@ async function extractCandidateProfile(
         },
       },
     }),
-    45000,
+    EXTRACT_TIMEOUT_MS,
   );
 
   const parsed = JSON.parse(response.output_text) as Partial<CandidateProfileResponse>;
@@ -871,6 +1162,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    candidateProfile = await enrichRolesFromZeugnisse(candidateProfile, documents);
+
+    const capabilityInventory: CandidateCapabilityInventory =
+      normalizeCandidateCapabilities(asCandidateProfile(candidateProfile));
+
     // Attach the fingerprint to the profile so it survives round-trips through
     // rawResponse and is available to the next rebuild for same-doc detection.
     candidateProfile = { ...candidateProfile, sourceFingerprint: incomingFingerprint };
@@ -881,6 +1177,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       candidateProfile,
+      capabilityInventory,
       warnings: prepared.warnings,
       metrics: prepared.metrics,
       detectedInputLanguages,

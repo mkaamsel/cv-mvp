@@ -78,8 +78,53 @@ export default function SettingsPage() {
         Manage your account and data preferences.
       </p>
 
+      <div
+        style={{
+          border: `1px solid ${t.colors.border}`,
+          borderRadius: t.radius.md,
+          background: t.colors.backgroundSoft,
+          padding: "16px 18px",
+          marginBottom: 20,
+          display: "grid",
+          gap: 10,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: t.colors.textPrimary,
+          }}
+        >
+          GDPR data control
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            lineHeight: 1.6,
+            color: t.colors.textSecondary,
+          }}
+        >
+          Need to leave the beta? You can permanently delete your account and
+          associated data at any time.
+        </div>
+        <a
+          href="#delete-account-section"
+          style={{
+            width: "fit-content",
+            fontSize: 13,
+            fontWeight: 700,
+            color: t.colors.danger,
+            textDecoration: "underline",
+          }}
+        >
+          Go to "Delete my account and data"
+        </a>
+      </div>
+
       {/* Delete account section */}
       <div
+        id="delete-account-section"
         style={{
           border: `1px solid ${t.colors.border}`,
           borderRadius: t.radius.md,

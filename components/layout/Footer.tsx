@@ -15,6 +15,7 @@ export default function Footer(): React.JSX.Element {
     >
       <Link href="/privacy">Privacy</Link>
       <Link href="/cookies">Cookies</Link>
+      <Link href="/imprint">Imprint</Link>
       <Link href="/terms">Terms</Link>
     </footer>
   );

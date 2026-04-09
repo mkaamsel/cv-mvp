@@ -9,19 +9,14 @@ export default function CookieBanner() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    const consent = localStorage.getItem("cookie_consent");
-    if (!consent) {
+    const noticeSeen = localStorage.getItem("cookie_notice_seen");
+    if (!noticeSeen) {
       setVisible(true);
     }
   }, []);
 
-  function acceptCookies() {
-    localStorage.setItem("cookie_consent", "accepted");
-    setVisible(false);
-  }
-
-  function declineCookies() {
-    localStorage.setItem("cookie_consent", "declined");
+  function dismissNotice() {
+    localStorage.setItem("cookie_notice_seen", "yes");
     setVisible(false);
   }
 
@@ -63,9 +58,8 @@ export default function CookieBanner() {
             maxWidth: 640,
           }}
         >
-          We use cookies to improve the experience of this application. By
-          continuing to use the platform you agree to the use of cookies for
-          basic functionality and analytics.
+          We use essential cookies only for login/session handling in this beta.
+          We do not use tracking or advertising cookies.
         </div>
 
         <div
@@ -76,23 +70,7 @@ export default function CookieBanner() {
           }}
         >
           <button
-            onClick={declineCookies}
-            style={{
-              border: `1px solid ${t.colors.border}`,
-              background: t.colors.surface,
-              color: t.colors.textPrimary,
-              padding: "8px 14px",
-              borderRadius: t.radius.sm,
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Decline
-          </button>
-
-          <button
-            onClick={acceptCookies}
+            onClick={dismissNotice}
             style={{
               border: "none",
               background: t.colors.primary,
@@ -105,7 +83,7 @@ export default function CookieBanner() {
               boxShadow: t.shadow.sm,
             }}
           >
-            Accept
+            OK
           </button>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { normalizeArray } from "@/lib/profile/onboarding";
 
 function mergeValue(existing: unknown, incoming: unknown) {
@@ -16,7 +16,7 @@ function mergeValue(existing: unknown, incoming: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const supabase = await createClient();
+    const supabase = await createSupabaseServerClient();
     const {
       data: { user },
       error: authError,

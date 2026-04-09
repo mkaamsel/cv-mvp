@@ -1,4 +1,5 @@
 import "@/app/globals.css";
+import CookieBanner from "@/components/CookieBanner";
 import Footer from "@/components/layout/Footer";
 
 export default function RootLayout({
@@ -10,6 +11,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         {children}
+        <CookieBanner />
         <Footer />
       </body>
     </html>

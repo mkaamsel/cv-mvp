@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   saveCandidateWorkspace,
   type CandidateProfile,
+  type CandidateCapabilityInventory,
   type StoredDocument,
 } from "@/lib/profile/profile-store";
 
@@ -11,6 +12,7 @@ export const dynamic = "force-dynamic";
 
 type SaveProfileRequest = {
   profile?: CandidateProfile | null;
+  capabilityInventory?: CandidateCapabilityInventory | null;
   documents?: StoredDocument[];
   meta?: Record<string, unknown>;
 };
@@ -19,6 +21,7 @@ type SaveProfileSuccess = {
   ok: true;
   workspace: {
     profile: CandidateProfile | null;
+    capabilityInventory: CandidateCapabilityInventory | null;
     documents: StoredDocument[];
     meta: Record<string, unknown>;
     createdAt: string | null;
@@ -114,6 +117,12 @@ export async function POST(request: Request): Promise<Response> {
 
     const workspace = await saveCandidateWorkspace({
       profile,
+      capabilityInventory:
+        body.capabilityInventory &&
+        typeof body.capabilityInventory === "object" &&
+        !Array.isArray(body.capabilityInventory)
+          ? body.capabilityInventory
+          : null,
       documents,
       meta,
     });
@@ -122,6 +131,7 @@ export async function POST(request: Request): Promise<Response> {
       ok: true,
       workspace: {
         profile: workspace.profile ?? null,
+        capabilityInventory: workspace.capabilityInventory ?? null,
         documents: Array.isArray(workspace.documents)
           ? workspace.documents
           : [],

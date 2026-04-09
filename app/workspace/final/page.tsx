@@ -111,7 +111,10 @@ type DocTab = "cv" | "coverletter";
 export default function WorkspaceFinalPage() {
   const { state, progress } = useWorkspace();
 
-  const finalDrafts = state.finalDrafts;
+  const finalDrafts =
+    state.finalDraftPreference === "original" && state.originalFinalDrafts
+      ? state.originalFinalDrafts
+      : state.finalDrafts;
   const finalCv = extractFinalCv(finalDrafts);
   const finalCoverLetter = extractFinalCoverLetter(finalDrafts);
 
@@ -232,6 +235,11 @@ export default function WorkspaceFinalPage() {
             {roleLabel !== "this role"
               ? `Tailored for: ${roleLabel}`
               : "Review your CV and cover letter, then send when you are ready."}
+          </p>
+        )}
+        {hasFinalDrafts && state.finalDraftPreference === "original" && (
+          <p style={{ ...subheadStyle, marginTop: 6 }}>
+            Showing your original drafts from before profile update.
           </p>
         )}
 
@@ -555,7 +563,7 @@ const docTextStyle: CSSProperties = {
   border: `1px solid ${t.colors.border}`,
   borderRadius: t.radius.md,
   boxShadow: t.shadow.sm,
-  maxWidth: 760,
+  width: "100%",
 };
 
 const docParaStyle: CSSProperties = {

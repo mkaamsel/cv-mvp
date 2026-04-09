@@ -15,6 +15,7 @@ import { useBehaviouralField } from "@/lib/workspace/useBehaviouralField";
 import { designTokens } from "@/lib/design/tokens";
 import type { FieldMetrics } from "@/lib/workspace/behaviouralTelemetry";
 import type {
+  WorkspaceCandidateCapabilityInventory,
   WorkspaceCandidateProfile,
   WorkspaceCandidateCertification,
   WorkspaceCandidateEducation,
@@ -48,6 +49,11 @@ type UploadStatus =
   | { status: "uploading" }
   | { status: "error"; message: string };
 
+type UploadFailureNotice = {
+  message: string;
+  visibleUntil: number;
+};
+
 // Holds an uploaded file that is awaiting type confirmation before being
 // committed to the document library.
 type PendingDoc = {
@@ -61,12 +67,15 @@ type PendingDoc = {
 
 type ExtractCandidateProfileSuccess = {
   candidateProfile: Record<string, unknown>;
+  capabilityInventory?: unknown;
   warnings?: string[];
 };
 type ExtractCandidateProfileError = { error?: string };
 type ExtractCandidateProfileResponse =
   | ExtractCandidateProfileSuccess
   | ExtractCandidateProfileError;
+
+type BuildCompletionState = "idle" | "success" | "error";
 
 const BUILD_MESSAGES = [
   "Reading your experience…",
@@ -247,6 +256,17 @@ function normalizeWorkspaceCandidateProfile(
   };
 }
 
+function normalizeWorkspaceCapabilityInventory(
+  input: unknown,
+): WorkspaceCandidateCapabilityInventory | null {
+  const raw = asRecord(input);
+  if (!raw) return null;
+  if (!Array.isArray(raw.capabilities)) return null;
+  if (!asRecord(raw.facets)) return null;
+  if (!asRecord(raw.provenance)) return null;
+  return raw as WorkspaceCandidateCapabilityInventory;
+}
+
 // (client-side mergeProfiles removed — the server is now the single authority for
 // all profile merging. Same-doc rebuilds return fresh as authoritative; new-doc
 // enrichments are unioned + canonicalized server-side. Client-side union was the
@@ -329,6 +349,7 @@ export default function WorkspaceProfilePage() {
     state,
     setDocuments,
     setCandidateProfile,
+    setCapabilityInventory,
     setUploadedFiles,
     setProfileStatus,
     setProfileError,
@@ -340,6 +361,8 @@ export default function WorkspaceProfilePage() {
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>({
     status: "idle",
   });
+  const [uploadFailureNotice, setUploadFailureNotice] =
+    useState<UploadFailureNotice | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const docIdRef = useRef(0);
   const [pendingDoc, setPendingDoc] = useState<PendingDoc | null>(null);
@@ -352,6 +375,9 @@ export default function WorkspaceProfilePage() {
   const [pasteText, setPasteText] = useState("");
   const [pasteDocType, setPasteDocType] = useState<DocType>("cv");
   const [pasteCustomLabel, setPasteCustomLabel] = useState("");
+  const [clarificationDraft, setClarificationDraft] = useState("");
+  const [lowerPaneSplit, setLowerPaneSplit] = useState(0.65);
+  const [isResizingLowerPanes, setIsResizingLowerPanes] = useState(false);
 
   // Language preference (UI only — no pipeline behavior)
   const [preferredLang, setPreferredLang] = useState<"en" | "de" | "es">("en");
@@ -360,12 +386,24 @@ export default function WorkspaceProfilePage() {
   const [isBuilding, setIsBuilding] = useState(false);
   const [buildProgress, setBuildProgress] = useState(0);
   const [buildMsgIdx, setBuildMsgIdx] = useState(0);
+  const [buildCompletion, setBuildCompletion] =
+    useState<BuildCompletionState>("idle");
+  const [buildCompletionMessage, setBuildCompletionMessage] = useState<
+    string | null
+  >(null);
   const [profileDiff, setProfileDiff] = useState<ProfileDiff | null>(null);
 
   // Delete modal
   const [deleteState, setDeleteState] = useState<
     "idle" | "confirming" | "deleting"
   >("idle");
+  const lowerPaneRef = useRef<HTMLDivElement | null>(null);
+  const buildCompletionResetRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const uploadFailureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Enrichment hint for paste field
   const [pasteHint, setPasteHint] = useState<string | null>(null);
@@ -460,12 +498,14 @@ export default function WorkspaceProfilePage() {
 
   useEffect(() => {
     if (!isBuilding) {
-      setBuildProgress(0);
-      setBuildMsgIdx(0);
+      if (buildCompletion === "idle") {
+        setBuildProgress(0);
+        setBuildMsgIdx(0);
+      }
       return;
     }
     const progressInterval = setInterval(() => {
-      setBuildProgress((prev) => Math.min(prev + 88 / 28, 88));
+      setBuildProgress((prev) => Math.min(prev + 86 / 28, 92));
     }, 1000);
     const msgInterval = setInterval(() => {
       setBuildMsgIdx((prev) => (prev + 1) % BUILD_MESSAGES.length);
@@ -474,7 +514,74 @@ export default function WorkspaceProfilePage() {
       clearInterval(progressInterval);
       clearInterval(msgInterval);
     };
-  }, [isBuilding]);
+  }, [isBuilding, buildCompletion]);
+
+  useEffect(() => {
+    return () => {
+      if (buildCompletionResetRef.current) {
+        clearTimeout(buildCompletionResetRef.current);
+      }
+      if (uploadFailureTimerRef.current) {
+        clearTimeout(uploadFailureTimerRef.current);
+      }
+    };
+  }, []);
+
+  function showUploadFailureNotice(message: string) {
+    const visibleForMs = 6000;
+    const visibleUntil = Date.now() + visibleForMs;
+    setUploadFailureNotice({ message, visibleUntil });
+    if (uploadFailureTimerRef.current) {
+      clearTimeout(uploadFailureTimerRef.current);
+    }
+    uploadFailureTimerRef.current = setTimeout(() => {
+      setUploadFailureNotice((current) => {
+        if (!current) return null;
+        return Date.now() >= current.visibleUntil ? null : current;
+      });
+      uploadFailureTimerRef.current = null;
+    }, visibleForMs);
+  }
+
+  useEffect(() => {
+    if (!isResizingLowerPanes) return;
+
+    function handlePointerMove(event: MouseEvent) {
+      const container = lowerPaneRef.current;
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      const dividerWidth = 12;
+      const minLeft = 360;
+      const minRight = 280;
+      const availableWidth = rect.width - dividerWidth;
+
+      if (availableWidth <= minLeft + minRight) {
+        setLowerPaneSplit(0.65);
+        return;
+      }
+
+      const rawLeft = event.clientX - rect.left - dividerWidth / 2;
+      const nextLeft = Math.min(
+        Math.max(rawLeft, minLeft),
+        availableWidth - minRight,
+      );
+
+      setLowerPaneSplit(nextLeft / availableWidth);
+    }
+
+    function handlePointerUp() {
+      setIsResizingLowerPanes(false);
+    }
+
+    window.addEventListener("mousemove", handlePointerMove);
+    window.addEventListener("mouseup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handlePointerMove);
+      window.removeEventListener("mouseup", handlePointerUp);
+    };
+  }, [isResizingLowerPanes]);
 
   // ── File upload ────────────────────────────────────────────────────────────
 
@@ -497,10 +604,13 @@ export default function WorkspaceProfilePage() {
       };
       if (!res.ok || !data.extractedText) {
         URL.revokeObjectURL(blobUrl);
+        const message =
+          data.error ?? "The file couldn't be read. Try a different format.";
         setUploadStatus({
           status: "error",
-          message: data.error ?? "The file couldn't be read. Try a different format.",
+          message,
         });
+        showUploadFailureNotice(message);
         return;
       }
       const fileName = data.fileName ?? file.name;
@@ -515,12 +625,19 @@ export default function WorkspaceProfilePage() {
         customLabel: "",
       });
       setUploadStatus({ status: "idle" });
+      setUploadFailureNotice(null);
+      if (uploadFailureTimerRef.current) {
+        clearTimeout(uploadFailureTimerRef.current);
+        uploadFailureTimerRef.current = null;
+      }
     } catch {
       URL.revokeObjectURL(blobUrl);
+      const message = "Upload failed. Check your connection and try again.";
       setUploadStatus({
         status: "error",
-        message: "Upload failed. Check your connection and try again.",
+        message,
       });
+      showUploadFailureNotice(message);
     }
   }
 
@@ -617,11 +734,18 @@ export default function WorkspaceProfilePage() {
     setPendingDoc(null);
     setDocs([]);
     setUploadStatus({ status: "idle" });
+    setUploadFailureNotice(null);
+    if (uploadFailureTimerRef.current) {
+      clearTimeout(uploadFailureTimerRef.current);
+      uploadFailureTimerRef.current = null;
+    }
   }
 
   // ── Build profile ──────────────────────────────────────────────────────────
 
   async function handleBuildProfile() {
+    if (isBuilding) return;
+
     if (docs.length === 0) {
       setProfileError(
         profile
@@ -633,6 +757,14 @@ export default function WorkspaceProfilePage() {
     }
 
     setProfileDiff(null);
+    if (buildCompletionResetRef.current) {
+      clearTimeout(buildCompletionResetRef.current);
+      buildCompletionResetRef.current = null;
+    }
+    setBuildCompletion("idle");
+    setBuildCompletionMessage(null);
+    setBuildProgress(4);
+    setBuildMsgIdx(0);
     setIsBuilding(true);
     setProfileStatus("loading");
     setProfileError(null);
@@ -663,7 +795,7 @@ export default function WorkspaceProfilePage() {
       : null;
 
     const buildAbort = new AbortController();
-    const buildTimeoutId = setTimeout(() => buildAbort.abort(), 90000);
+    const buildTimeoutId = setTimeout(() => buildAbort.abort(), 180000);
 
     try {
       const response = await fetch("/api/extract-candidate-profile", {
@@ -700,9 +832,13 @@ export default function WorkspaceProfilePage() {
       const normalizedProfile = normalizeWorkspaceCandidateProfile(
         data.candidateProfile,
       );
+      const normalizedCapabilityInventory = normalizeWorkspaceCapabilityInventory(
+        "capabilityInventory" in data ? data.capabilityInventory : null,
+      );
       const uploadedFiles = documents.map((d) => d.fileName);
 
       setCandidateProfile(normalizedProfile);
+      setCapabilityInventory(normalizedCapabilityInventory);
       setUploadedFiles(uploadedFiles);
 
       if (profile) {
@@ -734,6 +870,7 @@ export default function WorkspaceProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           profile: normalizedProfile.rawResponse ?? normalizedProfile,
+          capabilityInventory: normalizedCapabilityInventory,
           documents,
           meta: {
             locale: "en",
@@ -754,20 +891,37 @@ export default function WorkspaceProfilePage() {
         );
       }
 
+      setBuildProgress(100);
+      setBuildCompletion("success");
+      setBuildCompletionMessage(
+        isEnrichMode
+          ? "Profile enrichment completed successfully."
+          : "Profile build completed successfully.",
+      );
+      buildCompletionResetRef.current = setTimeout(() => {
+        setBuildCompletion("idle");
+        setBuildCompletionMessage(null);
+      }, 2200);
       setIsBuilding(false);
       setProfileStatus("ready");
       setProfileError(null);
     } catch (error) {
       clearTimeout(buildTimeoutId);
       setIsBuilding(false);
-      setProfileStatus("error");
-      setProfileError(
+      setBuildCompletion("error");
+      const hasContinuableProfile = Boolean(profile);
+      const timeoutMessage = hasContinuableProfile
+        ? "Build timed out for this document set. Your current profile is still available, so you can continue to Job or retry with fewer/lighter documents."
+        : "Build timed out for this document set. Please retry, or reduce the number/size of documents and run again.";
+      const failureMessage =
         error instanceof Error && error.name === "AbortError"
-          ? "Building your profile is taking longer than expected. Please try again."
+          ? timeoutMessage
           : error instanceof Error
             ? error.message
-            : "Unexpected profile error.",
-      );
+            : "Unexpected profile error.";
+      setBuildCompletionMessage(failureMessage);
+      setProfileStatus(hasContinuableProfile ? "ready" : "error");
+      setProfileError(failureMessage);
     }
   }
 
@@ -830,6 +984,25 @@ export default function WorkspaceProfilePage() {
               Clear all
             </button>
           )}
+        </div>
+
+        <div
+          style={{
+            marginBottom: 12,
+            border: `1px solid ${t.colors.border}`,
+            background: t.colors.backgroundSoft,
+            borderRadius: t.radius.md,
+            padding: "10px 12px",
+            fontSize: 13,
+            lineHeight: 1.6,
+            color: t.colors.textSecondary,
+          }}
+        >
+          Your uploaded documents will be analysed using AI services to extract
+          professional information and generate application materials. The AI
+          provider does not use this data to train its models. If you prefer,
+          you may anonymise your documents before uploading by removing personal
+          identifiers such as your name or contact details.
         </div>
 
         {/* Horizontal document shelf — fixed height, does not grow with more docs */}
@@ -962,7 +1135,7 @@ export default function WorkspaceProfilePage() {
             >
               {/* Filename + cancel */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
-                <span style={{ fontWeight: 700, fontSize: 12, color: t.colors.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={pendingDoc.fileName}>
+                <span style={{ fontWeight: 700, fontSize: 11, lineHeight: 1.2, color: t.colors.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={pendingDoc.fileName}>
                   {pendingDoc.fileName}
                 </span>
                 <button
@@ -980,16 +1153,17 @@ export default function WorkspaceProfilePage() {
               </span>
 
               {/* Type buttons */}
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                 {(["cv", "reference", "certificate", "other"] as DocType[]).map((dt) => (
                   <button
                     key={dt}
                     type="button"
                     onClick={() => setPendingDoc((p) => p ? { ...p, docType: dt } : p)}
                     style={{
-                      fontSize: 11,
+                      fontSize: 10,
                       fontWeight: 700,
-                      padding: "3px 7px",
+                      lineHeight: 1.1,
+                      padding: "2px 6px",
                       borderRadius: t.radius.sm,
                       border: `1px solid ${pendingDoc.docType === dt ? t.colors.textPrimary : t.colors.border}`,
                       background: pendingDoc.docType === dt ? t.colors.textPrimary : t.colors.surface,
@@ -1056,7 +1230,7 @@ export default function WorkspaceProfilePage() {
           </button>
         </div>
 
-        {uploadStatus.status === "error" && (
+        {uploadFailureNotice && (
           <div
             style={{
               marginTop: 10,
@@ -1067,7 +1241,7 @@ export default function WorkspaceProfilePage() {
               fontSize: 13,
             }}
           >
-            {uploadStatus.message}
+            {uploadFailureNotice.message}
           </div>
         )}
       </AppCard>
@@ -1083,7 +1257,7 @@ export default function WorkspaceProfilePage() {
       >
         {/* ── Add Information ── */}
         <AppCard className="p-6">
-          <h2 style={titleStyle}>Add information</h2>
+          <h2 style={titleStyle}>Type or paste any text here</h2>
           <p style={copyStyle}>
             Upload a file or paste text to add it to the Document Library.
             Documents are processed together in one pass.
@@ -1101,38 +1275,6 @@ export default function WorkspaceProfilePage() {
               e.target.value = "";
             }}
           />
-
-          {/* Upload button */}
-          <div style={{ marginTop: 16, display: "flex", gap: 10, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploadStatus.status === "uploading"}
-              style={{
-                height: 36,
-                border: `1px solid ${t.colors.border}`,
-                borderRadius: t.radius.sm,
-                background: t.colors.surface,
-                color: t.colors.textPrimary,
-                fontSize: 13,
-                fontWeight: 700,
-                padding: "0 14px",
-                cursor:
-                  uploadStatus.status === "uploading"
-                    ? "not-allowed"
-                    : "pointer",
-                opacity: uploadStatus.status === "uploading" ? 0.6 : 1,
-                flexShrink: 0,
-              }}
-            >
-              {uploadStatus.status === "uploading"
-                ? "Extracting…"
-                : "Upload file"}
-            </button>
-            <span style={{ fontSize: 12, color: t.colors.textMuted }}>
-              PDF, DOCX, PNG, JPG — up to 10 MB
-            </span>
-          </div>
 
           {/* Paste area */}
           <div style={{ marginTop: 16 }}>
@@ -1231,7 +1373,7 @@ export default function WorkspaceProfilePage() {
 
           {/* Build / enrich button */}
           <div style={{ marginTop: 20 }}>
-            {isBuilding ? (
+            {isBuilding || buildCompletion === "success" ? (
               <div>
                 <div
                   style={{
@@ -1241,7 +1383,9 @@ export default function WorkspaceProfilePage() {
                     marginBottom: 8,
                   }}
                 >
-                  {BUILD_MESSAGES[buildMsgIdx]}
+                  {isBuilding
+                    ? BUILD_MESSAGES[buildMsgIdx]
+                    : "Build complete"}
                 </div>
                 <div
                   style={{
@@ -1285,7 +1429,28 @@ export default function WorkspaceProfilePage() {
               </button>
             )}
 
-            {state.profileError && (
+            {buildCompletionMessage && (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "10px 12px",
+                  borderRadius: t.radius.md,
+                  border: `1px solid ${t.colors.border}`,
+                  background:
+                    buildCompletion === "success"
+                      ? t.colors.accentGreen
+                      : t.colors.backgroundSoft,
+                  color: t.colors.textPrimary,
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                }}
+              >
+                {buildCompletionMessage}
+              </div>
+            )}
+
+            {state.profileError &&
+              state.profileError !== buildCompletionMessage && (
               <div
                 style={{
                   marginTop: 10,
@@ -1418,100 +1583,186 @@ export default function WorkspaceProfilePage() {
       <AppCard className="p-6">
         <h2 style={titleStyle}>Questions &amp; conversation</h2>
 
-        {/* Question list — fixed height, scrollable */}
         <div
           style={{
-            overflowY: "auto",
-            maxHeight: 220,
             marginTop: 10,
-            paddingRight: 4,
+            display: "grid",
+            gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)",
+            gap: 16,
+            height: 420,
           }}
         >
-          {!profile ? (
-            <p style={{ ...copyStyle, margin: 0 }}>
-              Build your profile to see system questions here.
-            </p>
-          ) : (profile.openQuestions?.length ?? 0) > 0 ? (
-            <>
-              <p style={{ ...copyStyle, marginTop: 0, marginBottom: 12 }}>
-                The system flagged these questions while reading your documents.
-                They may indicate ambiguities or gaps worth addressing.
-              </p>
-              <div style={{ display: "grid", gap: 8 }}>
-                {profile.openQuestions!.map((q, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      padding: "10px 14px",
-                      borderRadius: t.radius.md,
-                      background: t.colors.accentYellow,
-                      fontSize: 14,
-                      color: t.colors.textSecondary,
-                      lineHeight: 1.6,
-                      display: "flex",
-                      gap: 10,
-                      alignItems: "flex-start",
-                    }}
-                  >
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        fontWeight: 800,
-                        color: t.colors.textPrimary,
-                        fontSize: 13,
-                        marginTop: 2,
-                      }}
-                    >
-                      Q{i + 1}
-                    </span>
-                    <span>{q}</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : (
-            <p style={{ ...copyStyle, margin: 0 }}>
-              No open questions from the system. Your profile looks complete.
-            </p>
-          )}
-        </div>
-
-        {/* Answer / Clarification — placeholder for future interactive clarification */}
-        <div
-          style={{
-            marginTop: 16,
-            padding: "12px 16px",
-            borderRadius: t.radius.md,
-            border: `1px dashed ${t.colors.border}`,
-            background: t.colors.backgroundSoft,
-          }}
-        >
-          <p
+          <div
             style={{
-              margin: 0,
-              fontSize: 13,
-              color: t.colors.textMuted,
-              fontStyle: "italic",
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.colors.border}`,
+              background: t.colors.surface,
+              padding: "12px 14px",
             }}
           >
-            Answer / Clarification — future versions will allow answering these
-            questions to enrich the profile.
-          </p>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <p
+                style={{
+                  ...copyStyle,
+                  margin: 0,
+                  fontWeight: 700,
+                  color: t.colors.textPrimary,
+                }}
+              >
+                System questions
+              </p>
+              <span style={{ fontSize: 12, color: t.colors.textMuted }}>
+                {profile?.openQuestions?.length ?? 0} item
+                {(profile?.openQuestions?.length ?? 0) !== 1 ? "s" : ""}
+              </span>
+            </div>
+
+            <div
+              style={{
+                minHeight: 0,
+                overflowY: "auto",
+                marginTop: 12,
+                paddingRight: 4,
+              }}
+            >
+              {!profile ? (
+                <p style={{ ...copyStyle, margin: 0 }}>
+                  Build your profile to see system questions here.
+                </p>
+              ) : (profile.openQuestions?.length ?? 0) > 0 ? (
+                <>
+                  <p style={{ ...copyStyle, marginTop: 0, marginBottom: 12 }}>
+                    The system flagged these questions while reading your
+                    documents. They may indicate ambiguities or gaps worth
+                    addressing.
+                  </p>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {profile.openQuestions!.map((q, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: t.radius.md,
+                          background: t.colors.accentYellow,
+                          fontSize: 14,
+                          color: t.colors.textSecondary,
+                          lineHeight: 1.6,
+                          display: "flex",
+                          gap: 10,
+                          alignItems: "flex-start",
+                        }}
+                      >
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            fontWeight: 800,
+                            color: t.colors.textPrimary,
+                            fontSize: 13,
+                            marginTop: 2,
+                          }}
+                        >
+                          Q{i + 1}
+                        </span>
+                        <span>{q}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p style={{ ...copyStyle, margin: 0 }}>
+                  No open questions from the system. Your profile looks
+                  complete.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div
+            style={{
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              borderRadius: t.radius.md,
+              border: `1px dashed ${t.colors.border}`,
+              background: t.colors.backgroundSoft,
+              padding: "12px 16px",
+            }}
+          >
+            <p
+              style={{
+                margin: 0,
+                fontSize: 13,
+                fontWeight: 700,
+                color: t.colors.textPrimary,
+              }}
+            >
+              Answer / clarification
+            </p>
+            <p
+              style={{
+                margin: "6px 0 0",
+                fontSize: 13,
+                color: t.colors.textMuted,
+                lineHeight: 1.6,
+              }}
+            >
+              Keep draft notes here while reviewing the questions above.
+            </p>
+            <textarea
+              value={clarificationDraft}
+              onChange={(e) => setClarificationDraft(e.target.value)}
+              placeholder="Write your clarification or answer here…"
+              style={{
+                ...textareaStyle,
+                flex: 1,
+                minHeight: 0,
+                marginTop: 12,
+                resize: "none",
+              }}
+            />
+            <p
+              style={{
+                margin: "10px 0 0",
+                fontSize: 12,
+                color: t.colors.textMuted,
+              }}
+            >
+              Saving answers back into the profile is not wired up yet in this
+              workspace flow.
+            </p>
+          </div>
         </div>
       </AppCard>
 
       {/* Row 3: Extracted Profile | What shaped this profile */}
       {profile && (
         <div
+          ref={lowerPaneRef}
           style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0,1.3fr) minmax(0,0.7fr)",
-            gap: 20,
+            display: "flex",
+            gap: 0,
             alignItems: "start",
+            userSelect: isResizingLowerPanes ? "none" : "auto",
           }}
         >
           {/* ── Extracted Profile ── */}
-          <AppCard className="p-6">
+          <div
+            style={{
+              flex: `0 0 calc(${(lowerPaneSplit * 100).toFixed(2)}% - 6px)`,
+              minWidth: 360,
+            }}
+          >
+            <AppCard className="p-6">
             <h2 style={titleStyle}>Extracted profile</h2>
 
             {/* Identity */}
@@ -1607,7 +1858,7 @@ export default function WorkspaceProfilePage() {
                             lineHeight: 1.6,
                           }}
                         >
-                          {role.achievements.slice(0, 3).join(" · ")}
+                          {role.achievements.join(" · ")}
                         </div>
                       )}
                     </div>
@@ -1838,10 +2089,47 @@ export default function WorkspaceProfilePage() {
                 </div>
               </div>
             )}
-          </AppCard>
+            </AppCard>
+          </div>
+
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize profile panels"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setIsResizingLowerPanes(true);
+            }}
+            style={{
+              flex: "0 0 12px",
+              alignSelf: "stretch",
+              display: "flex",
+              alignItems: "stretch",
+              justifyContent: "center",
+              cursor: "col-resize",
+              padding: "0 2px",
+            }}
+          >
+            <div
+              style={{
+                width: 2,
+                borderRadius: 999,
+                background: isResizingLowerPanes
+                  ? t.colors.textPrimary
+                  : t.colors.border,
+                opacity: isResizingLowerPanes ? 0.8 : 1,
+              }}
+            />
+          </div>
 
           {/* ── What shaped this profile ── */}
-          <AppCard className="p-6">
+          <div
+            style={{
+              flex: `0 0 calc(${((1 - lowerPaneSplit) * 100).toFixed(2)}% - 6px)`,
+              minWidth: 280,
+            }}
+          >
+            <AppCard className="p-6">
             <h2 style={titleStyle}>What shaped this profile</h2>
 
             {/* Build diff */}
@@ -1937,7 +2225,8 @@ export default function WorkspaceProfilePage() {
               Per-document contribution detail will appear here in a future
               update.
             </div>
-          </AppCard>
+            </AppCard>
+          </div>
         </div>
       )}
 
@@ -2137,3 +2426,5 @@ function TagGroup({ items }: { items: string[] }) {
     </div>
   );
 }
+
+

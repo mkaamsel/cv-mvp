@@ -1,4 +1,6 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import type { CandidateCapabilityInventory } from "@/lib/profile/capabilityNormalization";
+export type { CandidateCapabilityInventory } from "@/lib/profile/capabilityNormalization";
 
 export type SourceKind =
   | "primary_cv"
@@ -98,6 +100,8 @@ export type CandidateProfile = {
 export type CandidateWorkspace = {
   userId: string;
   profile: CandidateProfile | null;
+  // Derived snapshot for reasoning/observability layers.
+  capabilityInventory: CandidateCapabilityInventory | null;
   documents: StoredDocument[];
   meta: Record<string, unknown>;
   createdAt: string | null;
@@ -320,14 +324,24 @@ function normalizeCandidateProfile(value: unknown): CandidateProfile | null {
 }
 
 function mapWorkspaceRow(data: CandidateWorkspaceRow): CandidateWorkspace {
+  const normalizedMeta =
+    data.meta_json && typeof data.meta_json === "object" && !Array.isArray(data.meta_json)
+      ? data.meta_json
+      : {};
+  const capabilityInventory =
+    normalizeCapabilityInventory(
+      (normalizedMeta as Record<string, unknown>).capabilityInventoryDerived,
+    ) ??
+    normalizeCapabilityInventory(
+      (normalizedMeta as Record<string, unknown>).capabilityInventory,
+    );
+
   return {
     userId: data.user_id,
     profile: normalizeCandidateProfile(data.profile_json),
+    capabilityInventory,
     documents: normalizeDocuments(data.documents_json),
-    meta:
-      data.meta_json && typeof data.meta_json === "object" && !Array.isArray(data.meta_json)
-        ? data.meta_json
-        : {},
+    meta: normalizedMeta,
     createdAt: data.created_at ?? null,
     updatedAt: data.updated_at ?? null,
   };
@@ -426,6 +440,7 @@ export async function loadOrCreateCandidateWorkspace(
 
 export async function saveCandidateWorkspace(input: {
   profile?: CandidateProfile | null;
+  capabilityInventory?: CandidateCapabilityInventory | null;
   documents?: StoredDocument[];
   meta?: Record<string, unknown>;
 }): Promise<CandidateWorkspace> {
@@ -440,10 +455,18 @@ export async function saveCandidateWorkspace(input: {
   const documents =
     input.documents !== undefined ? normalizeDocuments(input.documents) : existing.documents ?? [];
 
+  const capabilityInventory =
+    input.capabilityInventory !== undefined
+      ? normalizeCapabilityInventory(input.capabilityInventory)
+      : existing.capabilityInventory ?? null;
+
   const meta = {
     ...(existing.meta ?? {}),
     ...((input.meta && typeof input.meta === "object" && !Array.isArray(input.meta))
       ? input.meta
+      : {}),
+    ...(capabilityInventory !== null
+      ? { capabilityInventoryDerived: capabilityInventory }
       : {}),
     sourceCount: documents.filter((doc) => doc.text.trim()).length,
   };
@@ -467,4 +490,198 @@ export async function saveCandidateWorkspace(input: {
   }
 
   return mapWorkspaceRow(data);
+}
+
+function asOptionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function normalizeCapabilityInventory(
+  value: unknown,
+): CandidateCapabilityInventory | null {
+  const root = asRecord(value);
+  if (!root) return null;
+
+  const capabilities = Array.isArray(root.capabilities)
+    ? root.capabilities
+        .map((item) => {
+          const capability = asRecord(item);
+          if (!capability) return null;
+          const capabilityId = asString(capability.capabilityId);
+          const label = asString(capability.label);
+          if (!capabilityId || !label) return null;
+          return {
+            capabilityId,
+            label,
+            category:
+              capability.category === "responsibility" ||
+              capability.category === "skill" ||
+              capability.category === "tool" ||
+              capability.category === "standard" ||
+              capability.category === "domain" ||
+              capability.category === "leadership" ||
+              capability.category === "process" ||
+              capability.category === "compliance"
+                ? capability.category
+                : "responsibility",
+            strength:
+              capability.strength === "core" ? "core" : "supporting",
+            confidence:
+              capability.confidence === "high" ||
+              capability.confidence === "medium"
+                ? capability.confidence
+                : "weak",
+            evidenceCount:
+              asOptionalNumber(capability.evidenceCount) ??
+              (Array.isArray(capability.evidence) ? capability.evidence.length : 0),
+            evidence: Array.isArray(capability.evidence)
+              ? capability.evidence
+                  .map((e) => {
+                    const evidence = asRecord(e);
+                    if (!evidence) return null;
+                    const rawText = asString(evidence.rawText);
+                    const normalizedText = asString(evidence.normalizedText);
+                    if (!rawText || !normalizedText) return null;
+                    const sourceType =
+                      evidence.sourceType === "role_achievement" ||
+                      evidence.sourceType === "core_skill" ||
+                      evidence.sourceType === "tool" ||
+                      evidence.sourceType === "standard" ||
+                      evidence.sourceType === "industry" ||
+                      evidence.sourceType === "verified_claim" ||
+                      evidence.sourceType === "language" ||
+                      evidence.sourceType === "certification" ||
+                      evidence.sourceType === "education"
+                        ? evidence.sourceType
+                        : "role_achievement";
+                    const roleIndex = asOptionalNumber(evidence.roleIndex);
+                    return {
+                      sourceType,
+                      ...(roleIndex !== undefined ? { roleIndex } : {}),
+                      rawText,
+                      normalizedText,
+                    };
+                  })
+                  .filter(
+                    (
+                      evidence,
+                    ): evidence is CandidateCapabilityInventory["capabilities"][number]["evidence"][number] =>
+                      Boolean(evidence),
+                  )
+              : [],
+            aliases: asStringArray(capability.aliases),
+          };
+        })
+        .filter(
+          (
+            item,
+          ): item is CandidateCapabilityInventory["capabilities"][number] =>
+            Boolean(item),
+        )
+    : [];
+
+  const facets = asRecord(root.facets);
+  const provenance = asRecord(root.provenance);
+  if (!facets || !provenance) return null;
+
+  const language = Array.isArray(facets.language)
+    ? facets.language
+        .map((item) => {
+          const row = asRecord(item);
+          const languageLabel = row ? asString(row.language) : null;
+          const normalizedLanguage = row ? asString(row.normalizedLanguage) : null;
+          if (!languageLabel || !normalizedLanguage) return null;
+          return {
+            language: languageLabel,
+            proficiency: row ? asString(row.proficiency) : null,
+            normalizedLanguage,
+          };
+        })
+        .filter(
+          (
+            item,
+          ): item is CandidateCapabilityInventory["facets"]["language"][number] =>
+            Boolean(item),
+        )
+    : [];
+
+  const certification = Array.isArray(facets.certification)
+    ? facets.certification
+        .map((item) => {
+          const row = asRecord(item);
+          const name = row ? asString(row.name) : null;
+          const normalizedName = row ? asString(row.normalizedName) : null;
+          if (!name || !normalizedName) return null;
+          return {
+            name,
+            issuer: row ? asString(row.issuer) : null,
+            date: row ? asString(row.date) : null,
+            normalizedName,
+          };
+        })
+        .filter(
+          (
+            item,
+          ): item is CandidateCapabilityInventory["facets"]["certification"][number] =>
+            Boolean(item),
+        )
+    : [];
+
+  const education = Array.isArray(facets.education)
+    ? facets.education
+        .map((item) => {
+          const row = asRecord(item);
+          const degree = row ? asString(row.degree) : null;
+          const normalizedDegree = row ? asString(row.normalizedDegree) : null;
+          if (!degree || !normalizedDegree) return null;
+          return {
+            degree,
+            field: row ? asString(row.field) : null,
+            institution: row ? asString(row.institution) : null,
+            endDate: row ? asString(row.endDate) : null,
+            normalizedDegree,
+          };
+        })
+        .filter(
+          (
+            item,
+          ): item is CandidateCapabilityInventory["facets"]["education"][number] =>
+            Boolean(item),
+        )
+    : [];
+
+  const industry = Array.isArray(facets.industry)
+    ? facets.industry
+        .map((item) => {
+          const row = asRecord(item);
+          const label = row ? asString(row.label) : null;
+          const normalizedLabel = row ? asString(row.normalizedLabel) : null;
+          if (!label || !normalizedLabel) return null;
+          return { label, normalizedLabel };
+        })
+        .filter(
+          (
+            item,
+          ): item is CandidateCapabilityInventory["facets"]["industry"][number] =>
+            Boolean(item),
+        )
+    : [];
+
+  const generatedAt = asString(provenance.generatedAt);
+  if (!generatedAt) return null;
+
+  return {
+    capabilities,
+    facets: {
+      language,
+      certification,
+      education,
+      industry,
+    },
+    provenance: {
+      generatedAt,
+    },
+  };
 }

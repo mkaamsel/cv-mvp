@@ -25,8 +25,6 @@ type TailoringPipelineInput = {
   cookieHeader?: string;
   jobUrl?: string;
   jobDescriptionText?: string;
-  candidateClarificationsText?: string;
-  candidateClarifications?: Record<string, unknown> | null;
   outputLanguage?: "en" | "de" | string;
   candidateProfile?: Record<string, unknown> | null;
   debugConfig?: DebugConfig;
@@ -52,7 +50,6 @@ type RequiredProfile = {
   qualificationSignals: string[];
   technicalSignals: string[];
   softSignals: string[];
-  coreRequirementSignals: string[]; // core-only signals, preferred/supporting excluded from missingCount
 };
 
 type CompanyContext = {
@@ -82,17 +79,6 @@ type SelectedEvidencePack = {
   transferableEvidence: string[];
   weakEvidence: string[];
   combinedTopEvidence: string[];
-  clarificationEvidenceUsed: string[];
-};
-
-type ApplicationStrategy = {
-  cvLeadEvidence: string[];
-  coverLetterOpeningAngle: string;
-  gapHandling: string[];
-  confidenceLevel: "confident" | "assured" | "careful";
-  toneGuidance: string[];
-  priorityThemes: string[];
-  doNotOverclaim: string[];
 };
 
 type PositioningBriefPack = {
@@ -103,7 +89,6 @@ type PositioningBriefPack = {
   positioningStrategy: string;
   coverLetterAngle: string;
   cvEmphasis: string[];
-  applicationStrategy: ApplicationStrategy;
 };
 
 type RecommendationPack = {
@@ -138,7 +123,6 @@ type ReviewResult = {
 type BundleAssembly = {
   candidateProfile: Record<string, unknown> | null;
   candidateProfileView: CandidateProfileView;
-  candidateClarifications: CandidateClarificationContext | null;
   jobProfile: WorkspaceJobProfile;
   structuredJob: StructuredJob;
   requiredProfile: RequiredProfile;
@@ -148,51 +132,6 @@ type BundleAssembly = {
   selectedEvidence: SelectedEvidencePack;
   positioningBrief: PositioningBriefPack;
   recommendation: RecommendationPack;
-  clarificationUsage?: ClarificationUsageMap;
-  truthReport?: TruthLayerReport;
-};
-
-type CandidateClarificationContext = {
-  text: string;
-  answers: Record<string, string>;
-  lines: string[];
-  signals: CandidateClarificationSignal[];
-  sourceType: "user_provided_unverified";
-};
-
-type CandidateClarificationSignal = {
-  signalId: string;
-  label: string;
-  source: "user_clarification";
-  confidence: "medium";
-  questionKey: string;
-  rawAnswer: string;
-};
-
-type ClarificationUsageMap = {
-  profile: string[];
-  selectedEvidence: string[];
-  recommendation: string[];
-  cv: string[];
-  coverLetter: string[];
-  truthLayer: Array<{
-    signal: string;
-    action: "kept" | "softened" | "removed";
-    reason: string;
-  }>;
-};
-
-type TruthLayerReport = {
-  cv: {
-    kept: string[];
-    softened: string[];
-    removed: string[];
-  };
-  coverLetter: {
-    kept: string[];
-    softened: string[];
-    removed: string[];
-  };
 };
 
 type WorkspaceJobProfile = {
@@ -205,11 +144,9 @@ type WorkspaceJobProfile = {
   extractedText?: string;
   extractionSource?:
     | "pasted-text"
-    | "direct-fetch"
+    | "direct"
     | "readable-fallback"
-    | "blocked-or-thin-content"
-    | "direct-fetch+user-text-fallback"
-    | "readable-fallback+user-text-fallback";
+    | "blocked-or-thin-content";
   normalizedUrl?: string;
   warnings?: string[];
   outputLanguage?: "de" | "en" | "es";
@@ -413,7 +350,6 @@ const DEFAULT_ENGINE_SWITCHES = {
   LAYER_8_POSITIONING_AI: true,
   LAYER_9_RECOMMENDATION: true,
   LAYER_9_RECOMMENDATION_AI: true,
-  LAYER_RECOMMENDATION_VALIDATION: true,
   LAYER_10_BUNDLE_ASSEMBLY: true,
   LAYER_11_GENERATION: true,
   LAYER_11_COVER_LETTER_AI: true,
@@ -638,7 +574,42 @@ function normalizeStructuredJob(input: unknown): StructuredJob {
     jobTitle = "";
   }
 
-  // jobTitle remains "" if not reliably extracted — no fallback from body text
+  if (!jobTitle) {
+    const titleSignals = [
+      "accountant",
+      "buchhalter",
+      "bilanzbuchhalter",
+      "hauptbuchhalter",
+      "finance manager",
+      "finance",
+      "accounting",
+      "controller",
+      "controlling",
+      "manager accounting",
+      "senior accountant",
+    ];
+
+    const scanLines = [...responsibilities, ...requirements, summary];
+
+    for (const line of scanLines) {
+      const lower = line.toLowerCase();
+
+      if (looksLikeBadTitle(line)) continue;
+
+      for (const signal of titleSignals) {
+        if (lower.includes(signal)) {
+          jobTitle = line;
+          break;
+        }
+      }
+
+      if (jobTitle) break;
+    }
+  }
+
+  if (!jobTitle) {
+    jobTitle = "Finance / Accounting role";
+  }
 
   return {
     companyName,
@@ -704,223 +675,8 @@ function getCandidateSkills(
   ]);
 }
 
-function containsAny(text: string, needles: string[]): boolean {
-  const lower = text.toLowerCase();
-  return needles.some((needle) => lower.includes(needle.toLowerCase()));
-}
-
-function isAffirmativeAnswer(text: string): boolean {
-  const lower = text.trim().toLowerCase();
-  if (!lower) return false;
-  return (
-    lower === "yes" ||
-    lower === "ja" ||
-    lower === "y" ||
-    lower === "oui" ||
-    lower === "si" ||
-    lower.startsWith("yes,") ||
-    lower.startsWith("ja,") ||
-    lower.startsWith("yes ") ||
-    lower.startsWith("ja ")
-  );
-}
-
-function normalizeClarificationAnswers(
-  value: Record<string, unknown> | null | undefined,
-): Record<string, string> {
-  if (!value) return {};
-  return Object.entries(value).reduce<Record<string, string>>((acc, [k, v]) => {
-    if (typeof v === "string" && v.trim()) {
-      acc[k] = v.trim();
-    }
-    return acc;
-  }, {});
-}
-
-function buildClarificationSignals(
-  answers: Record<string, string>,
-): CandidateClarificationSignal[] {
-  const out: CandidateClarificationSignal[] = [];
-  const seen = new Set<string>();
-
-  const addSignal = (
-    signalId: string,
-    label: string,
-    questionKey: string,
-    rawAnswer: string,
-  ) => {
-    const key = `${signalId}::${questionKey}::${rawAnswer.toLowerCase()}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({
-      signalId,
-      label,
-      source: "user_clarification",
-      confidence: "medium",
-      questionKey,
-      rawAnswer,
-    });
-  };
-
-  for (const [questionKey, rawAnswer] of Object.entries(answers)) {
-    const answer = rawAnswer.trim();
-    const lower = answer.toLowerCase();
-    const key = questionKey.trim().toLowerCase();
-    if (!answer) continue;
-
-    if (
-      key === "consolidation" &&
-      (isAffirmativeAnswer(answer) ||
-        containsAny(lower, [
-          "consolidat",
-          "group report",
-          "group accounting",
-          "consolidated financial",
-        ]))
-    ) {
-      addSignal(
-        "consolidated_reporting_support",
-        "Supported consolidated reporting activities",
-        questionKey,
-        answer,
-      );
-    }
-
-    if (
-      key === "policy" &&
-      (isAffirmativeAnswer(answer) ||
-        containsAny(lower, ["policy", "manual", "guideline", "sop", "procedure"]))
-    ) {
-      addSignal(
-        "policy_documentation_support",
-        "Contributed to accounting policies / manuals / SOPs / finance guidelines",
-        questionKey,
-        answer,
-      );
-    }
-
-    if (
-      key === "spreadsheet" ||
-      containsAny(lower, ["excel", "spreadsheet", "xverweis", "xlookup", "vlookup", "pivot"])
-    ) {
-      addSignal(
-        "spreadsheet_analysis_reporting",
-        "Spreadsheet analysis",
-        questionKey,
-        answer,
-      );
-    }
-
-    if (containsAny(lower, ["pivot", "pivot table", "pivots"])) {
-      addSignal("pivot_table_analysis", "Pivot tables", questionKey, answer);
-    }
-
-    if (containsAny(lower, ["xlookup", "xverweis", "vlookup", "lookup"])) {
-      addSignal(
-        "lookup_formula_workflows",
-        "Lookups / XLOOKUP / XVERWEIS",
-        questionKey,
-        answer,
-      );
-    }
-
-    if (containsAny(lower, ["export", "reporting file", "system file", "csv", "extract"])) {
-      addSignal(
-        "reporting_file_system_exports",
-        "Reporting files / system exports",
-        questionKey,
-        answer,
-      );
-    }
-  }
-
-  return out;
-}
-
-function buildCandidateClarificationContext(
-  clarificationsText: string,
-  clarificationAnswers: Record<string, unknown> | null | undefined,
-): CandidateClarificationContext | null {
-  const answers = normalizeClarificationAnswers(clarificationAnswers);
-  const text = clarificationsText.trim();
-  const signals = buildClarificationSignals(answers);
-  const lines = signals.map((signal) => signal.label);
-
-  if (!text && Object.keys(answers).length === 0 && signals.length === 0) {
-    return null;
-  }
-
-  return {
-    text,
-    answers,
-    lines,
-    signals,
-    sourceType: "user_provided_unverified",
-  };
-}
-
-function buildClarificationEnrichedCandidateProfile(
-  candidateProfile: Record<string, unknown> | null,
-  candidateClarifications: CandidateClarificationContext | null,
-): Record<string, unknown> | null {
-  if (!candidateProfile) return null;
-  if (!candidateClarifications || candidateClarifications.signals.length === 0) {
-    return candidateProfile;
-  }
-
-  const nextProfile: Record<string, unknown> = { ...candidateProfile };
-  const existingCoreSkills = asStringArray(candidateProfile.coreSkills);
-  const existingTools = asStringArray(candidateProfile.tools);
-  const existingEvidenceNotes = asStringArray(candidateProfile.evidenceNotes);
-
-  const coreSkillAdditions: string[] = [];
-  const toolAdditions: string[] = [];
-
-  for (const signal of candidateClarifications.signals) {
-    if (signal.signalId === "consolidated_reporting_support") {
-      coreSkillAdditions.push("Consolidated reporting support");
-    }
-    if (signal.signalId === "policy_documentation_support") {
-      coreSkillAdditions.push("Policy and SOP documentation");
-    }
-    if (signal.signalId === "spreadsheet_analysis_reporting") {
-      coreSkillAdditions.push("Spreadsheet-based analysis and reporting");
-    }
-    if (signal.signalId === "pivot_table_analysis") {
-      toolAdditions.push("Pivot Tables");
-    }
-    if (signal.signalId === "lookup_formula_workflows") {
-      toolAdditions.push("XLOOKUP / XVERWEIS / VLOOKUP");
-    }
-    if (signal.signalId === "reporting_file_system_exports") {
-      coreSkillAdditions.push("Reporting-file and system-export workflows");
-    }
-  }
-
-  nextProfile.coreSkills = dedupeStrings([
-    ...existingCoreSkills,
-    ...coreSkillAdditions,
-  ]);
-  nextProfile.tools = dedupeStrings([...existingTools, ...toolAdditions]);
-  nextProfile.evidenceNotes = dedupeStrings([
-    ...existingEvidenceNotes,
-    ...candidateClarifications.signals.slice(0, 6).map(
-      (signal) =>
-        `User clarification (unverified, medium confidence): ${signal.label}`,
-    ),
-  ]);
-  nextProfile.clarificationSignals = candidateClarifications.signals.map((signal) => ({
-    label: signal.label,
-    source: signal.source,
-    confidence: signal.confidence,
-  }));
-
-  return nextProfile;
-}
-
 function buildCandidateProfileView(
   candidateProfile: Record<string, unknown> | null,
-  candidateClarifications: CandidateClarificationContext | null = null,
 ): CandidateProfileView {
   const experienceSignals = getCandidateRoleLines(candidateProfile);
 
@@ -929,7 +685,6 @@ function buildCandidateProfileView(
     ...asStringArray(candidateProfile?.degrees),
     ...asStringArray(candidateProfile?.certifications),
     ...asStringArray(candidateProfile?.licenses),
-    ...(candidateClarifications?.lines ?? []),
   ]);
 
   return {
@@ -1021,8 +776,6 @@ function deriveRequiredProfile(job: StructuredJob): RequiredProfile {
     qualificationSignals: dedupeStrings(qualifications).slice(0, 8),
     technicalSignals: dedupeStrings(technical).slice(0, 8),
     softSignals: dedupeStrings(soft).slice(0, 8),
-    
-    coreRequirementSignals: dedupeStrings(qualifications).slice(0, 8),
   };
 }
 
@@ -1084,14 +837,6 @@ function mapAiRequiredProfileToInternal(
     ...softSignals,
   ]).slice(0, 10);
 
-  const coreRequirementSignals = dedupeStrings([
-    ...competencies
-      .filter((item) => item?.importance === "core")
-      .map((item) => asString(item?.interpretation) || asString(item?.competency) || "")
-      .filter(Boolean),
-    ...asStringArray(ai.requiredEducation).slice(0, 3),
-  ]).slice(0, 8);
-
   if (
     responsibilitySignals.length === 0 &&
     requirementSignals.length === 0 &&
@@ -1116,10 +861,6 @@ function mapAiRequiredProfileToInternal(
     technicalSignals:
       technicalSignals.length > 0 ? technicalSignals : fallback.technicalSignals,
     softSignals: softSignals.length > 0 ? softSignals : fallback.softSignals,
-    coreRequirementSignals:
-      coreRequirementSignals.length > 0
-        ? coreRequirementSignals
-        : fallback.coreRequirementSignals,
   };
 }
 
@@ -1411,7 +1152,6 @@ function mapAiMarketSignalsToInternal(
 function buildSelectedEvidencePack(
   candidateProfileView: CandidateProfileView,
   requiredProfile: RequiredProfile,
-  candidateClarifications: CandidateClarificationContext | null = null,
 ): SelectedEvidencePack {
   const roleLines = candidateProfileView.experienceSignals;
   const skills = candidateProfileView.possessionSignals;
@@ -1466,44 +1206,25 @@ function buildSelectedEvidencePack(
     .slice(0, 6)
     .map((item) => item.skill);
 
-  const clarificationEvidenceUsed = (candidateClarifications?.signals ?? [])
-    .filter((signal) => {
-      const allRequirements = [
-        ...requiredProfile.requirementSignals,
-        ...requiredProfile.technicalSignals,
-        ...requiredProfile.responsibilitySignals,
-      ];
-      return allRequirements.some(
-        (requirement) => scoreOverlap(signal.label, requirement) >= 2,
-      );
-    })
-    .map((signal) => `User clarification: ${signal.label}`);
-
-  const supportEvidenceWithClarifications = dedupeStrings([
-    ...supportEvidence,
-    ...clarificationEvidenceUsed,
-  ]).slice(0, 8);
-
   const transferableEvidence = roleLines
     .filter((line) => !strongEvidence.includes(line))
     .slice(0, 3);
 
   const weakEvidence = skills
-    .filter((skill) => !supportEvidenceWithClarifications.includes(skill))
+    .filter((skill) => !supportEvidence.includes(skill))
     .slice(0, 3);
 
   const combinedTopEvidence = dedupeStrings([
     ...strongEvidence,
-    ...supportEvidenceWithClarifications,
-  ]).slice(0, 10);
+    ...supportEvidence,
+  ]).slice(0, 8);
 
   return {
     strongEvidence,
-    supportEvidence: supportEvidenceWithClarifications,
+    supportEvidence,
     transferableEvidence,
     weakEvidence,
     combinedTopEvidence,
-    clarificationEvidenceUsed,
   };
 }
 
@@ -1518,22 +1239,13 @@ function buildMissingSignals(
     .join(" \n ")
     .trim();
 
-  // EXP-01: prefer core-only signals so preferred/supporting gaps don't inflate missingCount
-  const signalsToCheck =
-    requiredProfile.coreRequirementSignals.length > 0
-      ? requiredProfile.coreRequirementSignals
-      : requiredProfile.requirementSignals;
-
   if (!haystack) {
-    return signalsToCheck.slice(0, 5);
+    return requiredProfile.requirementSignals.slice(0, 5);
   }
 
-  // EXP-02: raise threshold from === 0 to < 2 so single shared common words
-  // don't falsely mark a requirement as covered; requirement needs 2+ token matches
-  return signalsToCheck
-    .filter((requirement) => scoreOverlap(haystack, requirement) < 2)
+  return requiredProfile.requirementSignals
+    .filter((requirement) => scoreOverlap(haystack, requirement) === 0)
     .slice(0, 5);
-  // EXP-02 end
 }
 
 function buildPositioningBriefPack(
@@ -1554,11 +1266,10 @@ function buildPositioningBriefPack(
         ? "senior_specialist"
         : "specialist";
 
-  // EXP-03: removed hardcoded finance fallback strings; replaced with generic cross-sector wording
   const headline =
     asString(candidateProfile?.headline) ??
     asString(candidateProfile?.summary) ??
-    "";
+    "Relevant finance background";
 
   const coreWhyFit = [
     headline,
@@ -1570,63 +1281,16 @@ function buildPositioningBriefPack(
 
   const positioningStrategy =
     missingSignals.length > 0
-      ? "Position through the strongest directly evidenced experience and acknowledge remaining gaps honestly and specifically."
-      : "Position through direct role alignment and the most relevant evidenced experience.";
+      ? "Position through proven accounting execution, strong closing and reconciliation credibility, and disciplined acknowledgment of qualification gaps."
+      : "Position through strong role alignment, closing credibility, and directly relevant accounting evidence.";
 
   const coverLetterAngle =
-    "Emphasise the most directly supported experience and frame the application around the strongest evidence of role fit.";
+    "Emphasise credible accounting depth, international coordination, and conservative positioning without overstating formal qualification overlap.";
 
   const cvEmphasis = dedupeStrings([
     ...selectedEvidence.strongEvidence.slice(0, 3),
     ...selectedEvidence.supportEvidence.slice(0, 2),
   ]).slice(0, 5);
-
-  const confidenceLevel: ApplicationStrategy["confidenceLevel"] =
-    positioningStrength === "strong"
-      ? "confident"
-      : positioningStrength === "solid"
-        ? "assured"
-        : "careful";
-
-  const toneGuidance: string[] = [
-    positioningTone === "leadership_adjacent"
-      ? "Write in a confident, senior tone — ownership and cross-functional coordination evident."
-      : positioningTone === "senior_specialist"
-        ? "Write in a capable, experienced tone — deep functional expertise is the anchor."
-        : "Write in a grounded specialist tone — practical delivery and hands-on capability.",
-    positioningStrength === "strong"
-      ? "Assert fit confidently where direct evidence supports it."
-      : positioningStrength === "solid"
-        ? "Position honestly — name gaps where they exist without undermining the application."
-        : "Position carefully — acknowledge gaps clearly and frame adjacent evidence as adjacent.",
-  ];
-
-  const applicationStrategy: ApplicationStrategy = {
-    cvLeadEvidence: dedupeStrings([
-      ...selectedEvidence.strongEvidence.slice(0, 3),
-      ...selectedEvidence.supportEvidence.slice(0, 2),
-    ]).slice(0, 5),
-    coverLetterOpeningAngle:
-      selectedEvidence.strongEvidence.length > 0
-        ? `Open with the strongest direct evidence of role fit: ${selectedEvidence.strongEvidence[0]}`
-        : "Open by establishing credible relevance to the core role requirements.",
-    gapHandling: missingSignals.slice(0, 3).map(
-      (s) => `Acknowledge gap in "${s}" honestly without overstating its impact.`,
-    ),
-    confidenceLevel,
-    toneGuidance: toneGuidance.slice(0, 4),
-    priorityThemes: (coreWhyFit.slice(0, 3).length > 0
-      ? coreWhyFit.slice(0, 3)
-      : dedupeStrings([
-          ...selectedEvidence.strongEvidence.slice(0, 2),
-          ...selectedEvidence.supportEvidence.slice(0, 1),
-        ])
-    ).slice(0, 3),
-    doNotOverclaim: (positioningRisks.slice(0, 4).length > 0
-      ? positioningRisks.slice(0, 4)
-      : missingSignals.slice(0, 4)
-    ).slice(0, 4),
-  };
 
   return {
     positioningStrength,
@@ -1636,7 +1300,6 @@ function buildPositioningBriefPack(
     positioningStrategy,
     coverLetterAngle,
     cvEmphasis,
-    applicationStrategy,
   };
 }
 
@@ -1648,34 +1311,6 @@ function mapAiPositioningToInternal(
 
   const strength = asString(ai.positioningStrength);
   const tone = asString(ai.positioningTone);
-
-  const aiStrategy = ai.applicationStrategy as Record<string, unknown> | null | undefined;
-
-  const cleanArray = (raw: unknown, cap: number): string[] =>
-    asStringArray(raw).map((s) => s.trim()).filter(Boolean).slice(0, cap);
-
-  const confidenceRaw = asString(aiStrategy?.confidenceLevel);
-  const mappedConfidence: ApplicationStrategy["confidenceLevel"] =
-    confidenceRaw === "confident" || confidenceRaw === "assured" || confidenceRaw === "careful"
-      ? confidenceRaw
-      : fallback.applicationStrategy.confidenceLevel;
-
-  const aiCvLeadEvidence = cleanArray(aiStrategy?.cvLeadEvidence, 5);
-  const aiGapHandling = cleanArray(aiStrategy?.gapHandling, 3);
-  const aiToneGuidance = cleanArray(aiStrategy?.toneGuidance, 4);
-  const aiPriorityThemes = cleanArray(aiStrategy?.priorityThemes, 3);
-  const aiDoNotOverclaim = cleanArray(aiStrategy?.doNotOverclaim, 4);
-
-  const applicationStrategy: ApplicationStrategy = {
-    cvLeadEvidence: aiCvLeadEvidence.length > 0 ? aiCvLeadEvidence : fallback.applicationStrategy.cvLeadEvidence,
-    coverLetterOpeningAngle:
-      asString(aiStrategy?.coverLetterOpeningAngle)?.trim() || fallback.applicationStrategy.coverLetterOpeningAngle,
-    gapHandling: aiGapHandling.length > 0 ? aiGapHandling : fallback.applicationStrategy.gapHandling,
-    confidenceLevel: mappedConfidence,
-    toneGuidance: aiToneGuidance.length > 0 ? aiToneGuidance : fallback.applicationStrategy.toneGuidance,
-    priorityThemes: aiPriorityThemes.length > 0 ? aiPriorityThemes : fallback.applicationStrategy.priorityThemes,
-    doNotOverclaim: aiDoNotOverclaim.length > 0 ? aiDoNotOverclaim : fallback.applicationStrategy.doNotOverclaim,
-  };
 
   return {
     positioningStrength:
@@ -1694,7 +1329,6 @@ function mapAiPositioningToInternal(
       asString(ai.positioningStrategy) ?? fallback.positioningStrategy,
     coverLetterAngle: asString(ai.coverLetterAngle) ?? fallback.coverLetterAngle,
     cvEmphasis: asStringArray(ai.cvEmphasis).slice(0, 6),
-    applicationStrategy,
   };
 }
 
@@ -1723,20 +1357,21 @@ function mapAiSelectedEvidenceToInternal(
     combinedTopEvidence: combined.length > 0
       ? combined
       : [...strong.slice(0, 5), ...support.slice(0, 3)].slice(0, 8),
-    clarificationEvidenceUsed: fallback.clarificationEvidenceUsed,
   };
 }
 
 function buildRecommendationPack(
   selectedEvidence: SelectedEvidencePack,
   missingSignals: string[],
+  marketSignals: MarketSignals,
 ): RecommendationPack {
   const evidenceCount = selectedEvidence.combinedTopEvidence.length;
   const missingCount = missingSignals.length;
 
   if (
     evidenceCount >= 5 &&
-    missingCount <= 1
+    missingCount <= 1 &&
+    marketSignals.strictnessSignal !== "higher"
   ) {
     return {
       applicationRecommendation: "apply_confidently",
@@ -1896,63 +1531,6 @@ function buildBundleAssembly(input: BundleAssembly): BundleAssembly {
   return input;
 }
 
-// ── Recommendation Validation ─────────────────────────────────────────────────
-// Detects internal contradictions between the L9 label and the L8 positioning
-// strength. In v1 only the most obvious contradiction is corrected:
-// no blockers + strong positioning + at least two strong matches + cautious label.
-// Only applicationRecommendation is mutated — prose fields are left as-is.
-
-type ValidationResult = {
-  triggered: boolean;
-  originalLabel: RecommendationPack["applicationRecommendation"];
-  correctedLabel: RecommendationPack["applicationRecommendation"];
-  reason: string;
-};
-
-function validateRecommendation(
-  recommendation: RecommendationPack,
-  positioningBrief: PositioningBriefPack,
-): { recommendation: RecommendationPack; validation: ValidationResult } {
-  const original = recommendation.applicationRecommendation;
-
-  const noBlockers = recommendation.blockers.length === 0;
-  const cautious = original === "apply_with_care";
-  const strongPositioning = positioningBrief.positioningStrength === "strong";
-  const sufficientMatches = recommendation.strongMatches.length >= 2;
-
-  if (noBlockers && cautious && strongPositioning && sufficientMatches) {
-    return {
-      recommendation: {
-        ...recommendation,
-        applicationRecommendation: "apply_confidently",
-        advisorMessage:
-          "The profile shows multiple credible alignment points for this role.",
-        reasoningSummary:
-          "The role has several clear fit signals and only limited uncovered requirements.",
-        recommendation:
-          "Recommended to proceed. The profile appears credibly aligned for application.",
-      },
-      validation: {
-        triggered: true,
-        originalLabel: original,
-        correctedLabel: "apply_confidently",
-        reason:
-          "No blockers, positioningStrength=strong, strongMatches>=2, original label apply_with_care — upgraded to apply_confidently.",
-      },
-    };
-  }
-
-  return {
-    recommendation,
-    validation: {
-      triggered: false,
-      originalLabel: original,
-      correctedLabel: original,
-      reason: "No contradiction detected — recommendation unchanged.",
-    },
-  };
-}
-
 function buildCvDraft(
   candidateProfile: Record<string, unknown> | null,
   bundle: BundleAssembly,
@@ -1963,7 +1541,7 @@ function buildCvDraft(
     "Experienced professional with relevant background for the target role.";
 
   const roleLines = getCandidateRoleLines(candidateProfile).slice(0, 4);
-  const roleLabel = bundle.structuredJob.jobTitle || "the target role";
+  const roleLabel = bundle.structuredJob.jobTitle || "Finance / Accounting role";
   const companyLabel = bundle.structuredJob.companyName || "the organisation";
 
   return [
@@ -2037,364 +1615,6 @@ function buildCoverLetterDraft(
     "",
     `Kind regards,\n${name}`,
   ].join("\n");
-}
-
-function buildCvClarificationUsageHints(
-  signals: CandidateClarificationSignal[],
-  requiredProfile: RequiredProfile,
-): string[] {
-  if (signals.length === 0) return [];
-  const requirementsText = [
-    ...requiredProfile.requirementSignals,
-    ...requiredProfile.technicalSignals,
-    ...requiredProfile.responsibilitySignals,
-  ].join(" \n ");
-
-  return signals
-    .filter((signal) => scoreOverlap(signal.label, requirementsText) >= 1)
-    .map((signal) => signal.label)
-    .slice(0, 6);
-}
-
-function buildCoverLetterClarificationUsageHints(
-  signals: CandidateClarificationSignal[],
-  requiredProfile: RequiredProfile,
-): string[] {
-  if (signals.length === 0) return [];
-  const strategicSignals = signals.filter((signal) =>
-    containsAny(signal.signalId, [
-      "consolidated_reporting_support",
-      "policy_documentation_support",
-      "spreadsheet_analysis_reporting",
-    ]),
-  );
-  const requirementsText = [
-    ...requiredProfile.requirementSignals,
-    ...requiredProfile.responsibilitySignals,
-  ].join(" \n ");
-
-  return strategicSignals
-    .filter((signal) => scoreOverlap(signal.label, requirementsText) >= 1)
-    .map((signal) => signal.label)
-    .slice(0, 3);
-}
-
-type TruthEvidenceMap = {
-  highEvidence: string[];
-  mediumEvidence: string[];
-  lowEvidence: string[];
-};
-
-type TruthLayerResult = {
-  correctedCv: string;
-  correctedCoverLetter: string;
-  truthReport: TruthLayerReport;
-};
-
-function buildTruthEvidenceMap(input: {
-  candidateProfileForTailoring: Record<string, unknown> | null;
-  selectedEvidence: SelectedEvidencePack;
-  candidateClarificationContext: CandidateClarificationContext | null;
-}): TruthEvidenceMap {
-  const highEvidence = dedupeStrings([
-    ...getCandidateRoleLines(input.candidateProfileForTailoring),
-    ...input.selectedEvidence.strongEvidence,
-    ...input.selectedEvidence.supportEvidence.filter(
-      (item) => !item.toLowerCase().startsWith("user clarification:"),
-    ),
-  ]);
-
-  const mediumEvidence = dedupeStrings([
-    ...input.selectedEvidence.clarificationEvidenceUsed,
-    ...(input.candidateClarificationContext?.signals ?? []).map((s) => s.label),
-  ]);
-
-  return {
-    highEvidence,
-    mediumEvidence,
-    lowEvidence: ["inferred reasoning from matching context"],
-  };
-}
-
-function deriveCandidateSenioritySignal(
-  candidateProfile: Record<string, unknown> | null,
-): "junior" | "mid" | "senior" {
-  const roleTitles = (Array.isArray(candidateProfile?.roles)
-    ? candidateProfile?.roles
-    : []
-  )
-    .map((item) => asString(asRecord(item)?.title) ?? "")
-    .filter(Boolean);
-
-  const haystack = [
-    ...roleTitles,
-    ...asStringArray(candidateProfile?.leadershipSignals),
-    asString(candidateProfile?.headline) ?? "",
-    asString(candidateProfile?.summary) ?? "",
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  if (
-    containsAny(haystack, [
-      "director",
-      "head",
-      "leiter",
-      "lead",
-      "manager",
-      "vp",
-      "chief",
-      "team lead",
-      "strategic",
-      "coordination responsibility",
-      "team leadership",
-    ])
-  ) {
-    return "senior";
-  }
-
-  if (
-    containsAny(haystack, [
-      "junior",
-      "assistant",
-      "intern",
-      "trainee",
-      "sachbearbeiter",
-      "sachbearbeitung",
-      "entry-level",
-      "clerk",
-    ])
-  ) {
-    return "junior";
-  }
-
-  return "mid";
-}
-
-function deriveJobSenioritySignal(
-  structuredJob: StructuredJob,
-  marketSignals: MarketSignals,
-): "junior" | "mid" | "senior" {
-  const haystack = [
-    structuredJob.jobTitle,
-    structuredJob.summary,
-    ...structuredJob.requirements,
-    ...structuredJob.responsibilities,
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  if (
-    containsAny(haystack, [
-      "sachbearbeiter",
-      "sachbearbeitung",
-      "assistant",
-      "junior",
-      "clerk",
-      "entry-level",
-      "operative support",
-    ])
-  ) {
-    return "junior";
-  }
-
-  if (
-    containsAny(haystack, [
-      "director",
-      "head",
-      "lead",
-      "leiter",
-      "manager",
-      "vp",
-      "chief",
-    ])
-  ) {
-    return "senior";
-  }
-
-  if (marketSignals.senioritySignal === "senior") return "senior";
-  if (marketSignals.senioritySignal === "junior") return "junior";
-  return "mid";
-}
-
-function applySeniorityMismatchCheck(
-  recommendation: RecommendationPack,
-  candidateProfile: Record<string, unknown> | null,
-  structuredJob: StructuredJob,
-  marketSignals: MarketSignals,
-): RecommendationPack {
-  const candidateSeniority = deriveCandidateSenioritySignal(candidateProfile);
-  const jobSeniority = deriveJobSenioritySignal(structuredJob, marketSignals);
-  const seniorityMismatch =
-    candidateSeniority === "senior" && jobSeniority === "junior";
-
-  if (!seniorityMismatch) return recommendation;
-
-  const mismatchNote =
-    "Role may be below your current seniority level and may underutilize your experience.";
-  const riskAreas = dedupeStrings([...recommendation.riskAreas, mismatchNote]);
-  const reasoningSummary = dedupeStrings([
-    recommendation.reasoningSummary,
-    mismatchNote,
-  ]).join(" ");
-  const advisorMessage = dedupeStrings([
-    recommendation.advisorMessage,
-    "The role appears materially below your current scope, so expectation alignment is important.",
-  ]).join(" ");
-
-  return {
-    ...recommendation,
-    riskAreas,
-    reasoningSummary,
-    advisorMessage,
-  };
-}
-
-function downgradeExaggeratedClaim(line: string): string {
-  let next = line;
-  next = next.replace(/\bled consolidated reporting\b/gi, "supported consolidated reporting activities");
-  next = next.replace(/\bdeveloped accounting policies\b/gi, "contributed to accounting policies or SOPs");
-  next = next.replace(/\bled\b/gi, "supported");
-  next = next.replace(/\bowned\b/gi, "supported");
-  next = next.replace(/\bspearheaded\b/gi, "contributed to");
-  next = next.replace(/\bdrove\b/gi, "supported");
-  return next;
-}
-
-function validateTruthLayer(
-  cvDraft: string,
-  coverLetterDraft: string,
-  evidenceMap: TruthEvidenceMap,
-): TruthLayerResult {
-  const applyToDocument = (text: string): { corrected: string; report: { kept: string[]; softened: string[]; removed: string[] } } => {
-    const lines = text.split("\n");
-    const kept: string[] = [];
-    const softened: string[] = [];
-    const removed: string[] = [];
-
-    const corrected = lines.map((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return line;
-      const lower = trimmed.toLowerCase();
-      const hasExaggerationVerb = /\b(led|owned|spearheaded|drove|transformed)\b/i.test(trimmed);
-      if (!hasExaggerationVerb) {
-        kept.push(trimmed);
-        return line;
-      }
-
-      const hasHigh = evidenceMap.highEvidence.some((item) => scoreOverlap(item, trimmed) >= 2);
-      const hasMedium = evidenceMap.mediumEvidence.some((item) => scoreOverlap(item, trimmed) >= 2);
-      const includesProtectedAtsKeyword = containsAny(lower, [
-        "ifrs",
-        "sap",
-        "excel",
-        "spreadsheet",
-        "pivot",
-        "xlookup",
-        "xverweis",
-        "vlookup",
-        "sop",
-        "guideline",
-        "policy",
-      ]);
-
-      if (hasHigh || includesProtectedAtsKeyword) {
-        kept.push(trimmed);
-        return line;
-      }
-
-      if (hasMedium) {
-        const downgraded = downgradeExaggeratedClaim(line);
-        softened.push(trimmed);
-        return downgraded;
-      }
-
-      const downgraded = downgradeExaggeratedClaim(line);
-      softened.push(trimmed);
-      return downgraded;
-    }).filter((line) => line !== "");
-
-    return {
-      corrected: corrected.join("\n"),
-      report: { kept, softened, removed },
-    };
-  };
-
-  const cv = applyToDocument(cvDraft);
-  const cover = applyToDocument(coverLetterDraft);
-
-  return {
-    correctedCv: cv.corrected,
-    correctedCoverLetter: cover.corrected,
-    truthReport: {
-      cv: cv.report,
-      coverLetter: cover.report,
-    },
-  };
-}
-
-function extractJobKeywords(structuredJob: StructuredJob): string[] {
-  const tokens = tokenize(
-    [
-      structuredJob.jobTitle,
-      structuredJob.summary,
-      ...structuredJob.responsibilities,
-      ...structuredJob.requirements,
-    ].join(" "),
-  );
-  return Array.from(new Set(tokens)).slice(0, 20);
-}
-
-function deriveCompanyTone(
-  companyContext: CompanyContext,
-  companyResearch: CompanyResearch,
-  marketSignals: MarketSignals,
-): string {
-  const signals = [
-    companyContext.environmentSummary,
-    ...companyResearch.notes,
-    ...marketSignals.notes,
-    marketSignals.strictnessSignal,
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  if (containsAny(signals, ["strict", "regulated", "formal"])) return "formal";
-  if (containsAny(signals, ["collaborative", "dynamic", "growth"])) return "dynamic";
-  return "professional";
-}
-
-function polishLanguageLayer(
-  text: string,
-  jobKeywords: string[],
-  companyTone: string,
-  outputLanguage: "en" | "de" | "es",
-): string {
-  const lines = text
-    .split("\n")
-    .map((line) => line.replace(/\s{2,}/g, " ").trimEnd());
-
-  const polished = lines.map((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return "";
-    let next = trimmed;
-    next = next.replace(/\s+,/g, ",");
-    next = next.replace(/\s+\./g, ".");
-    if (/^[a-z]/.test(next)) {
-      next = next[0].toUpperCase() + next.slice(1);
-    }
-    return next;
-  });
-
-  const keywordCoverage = jobKeywords.filter((k) =>
-    polished.join(" ").toLowerCase().includes(k.toLowerCase()),
-  );
-
-  if (outputLanguage === "en" && companyTone === "formal" && keywordCoverage.length > 0) {
-    return polished.join("\n").replace(/Dear Hiring Team,/g, "Dear Hiring Team,");
-  }
-
-  return polished.join("\n");
 }
 
 async function safeFetchJson<T>(
@@ -2537,8 +1757,6 @@ export async function runTailoringPipeline({
   cookieHeader = "",
   jobUrl,
   jobDescriptionText,
-  candidateClarificationsText,
-  candidateClarifications,
   outputLanguage,
   candidateProfile,
   debugConfig,
@@ -2553,39 +1771,17 @@ export async function runTailoringPipeline({
   const pipelineWarnings: string[] = [];
   const normalizedJobUrl = asString(jobUrl) ?? "";
   const normalizedJobDescriptionText = asString(jobDescriptionText) ?? "";
-  const normalizedCandidateClarificationsText =
-    asString(candidateClarificationsText) ?? "";
-  const normalizedClarificationAnswers = asRecord(candidateClarifications);
   const normalizedOutputLanguage = normalizeLanguage(outputLanguage);
   const normalizedCandidateProfile = asRecord(candidateProfile);
-  const candidateClarificationContext = buildCandidateClarificationContext(
-    normalizedCandidateClarificationsText,
-    normalizedClarificationAnswers,
-  );
-  const candidateProfileForTailoring = buildClarificationEnrichedCandidateProfile(
-    normalizedCandidateProfile,
-    candidateClarificationContext,
-  );
 
   console.log("[runTailoringPipeline] started", {
     origin,
     hasJobUrl: Boolean(normalizedJobUrl),
     jobDescriptionTextLength: normalizedJobDescriptionText.length,
-    candidateClarificationsTextLength: normalizedCandidateClarificationsText.length,
-    candidateClarificationLines: candidateClarificationContext?.lines.length ?? 0,
-    candidateClarificationSignals:
-      candidateClarificationContext?.signals.length ?? 0,
     outputLanguage: normalizedOutputLanguage,
-    hasCandidateProfile: Boolean(candidateProfileForTailoring),
-    candidateProfileKeys: candidateProfileForTailoring
-      ? Object.keys(candidateProfileForTailoring)
-      : [],
+    hasCandidateProfile: Boolean(normalizedCandidateProfile),
+    candidateProfileKeys: normalizedCandidateProfile ? Object.keys(normalizedCandidateProfile) : [],
   });
-  if (candidateClarificationContext?.lines.length) {
-    pipelineTrace.push(
-      `Layer0X: candidate-clarifications:user-unverified (${candidateClarificationContext.lines.length} lines, signals: ${candidateClarificationContext.signals.length})`,
-    );
-  }
 
   // ── Layer 0 — JD Quality Analysis ──────────────────────────────────────────
   let jdQualityAnalysis: JdQualityAnalysis | null = null;
@@ -2724,7 +1920,7 @@ export async function runTailoringPipeline({
     extractedText,
     extractionSource:
       (asString(extractData.source) as WorkspaceJobProfile["extractionSource"]) ??
-      (normalizedJobUrl ? "direct-fetch" : "pasted-text"),
+      "pasted-text",
     normalizedUrl: asString(extractData.normalizedUrl) ?? normalizedJobUrl,
     warnings: asStringArray(extractData.warnings),
     outputLanguage: normalizedOutputLanguage,
@@ -2750,19 +1946,11 @@ export async function runTailoringPipeline({
     try {
       const tLayer2 = Date.now();
       pipelineTrace.push("Layer2A: candidate-profile-view:start");
-      candidateProfileView = buildCandidateProfileView(
-        candidateProfileForTailoring,
-        candidateClarificationContext,
-      );
-      if (candidateClarificationContext?.lines.length) {
-        pipelineTrace.push(
-          `Layer2B: candidate-clarifications:applied (${candidateClarificationContext.lines.length} lines)`,
-        );
-      }
+      candidateProfileView = buildCandidateProfileView(normalizedCandidateProfile);
       pipelineTrace.push("Layer2A: candidate-profile-view:done");
       observationPoints.push(makeObservation(
         "Layer2_CandidateProfileView",
-        `Profile fields: ${candidateProfileForTailoring ? Object.keys(candidateProfileForTailoring).length : 0}, clarification lines: ${candidateClarificationContext?.lines.length ?? 0}`,
+        `Profile fields: ${normalizedCandidateProfile ? Object.keys(normalizedCandidateProfile).length : 0}`,
         `Experience signals: ${candidateProfileView.experienceSignals.length}, possession signals: ${candidateProfileView.possessionSignals.length}`,
         "rule_fallback",
         0.6,
@@ -2783,7 +1971,6 @@ export async function runTailoringPipeline({
     qualificationSignals: [],
     technicalSignals: [],
     softSignals: [],
-    coreRequirementSignals: [],
   };
 
   if (ENGINE_SWITCHES.LAYER_3_REQUIRED_PROFILE) {
@@ -3026,7 +2213,6 @@ export async function runTailoringPipeline({
     transferableEvidence: [],
     weakEvidence: [],
     combinedTopEvidence: [],
-    clarificationEvidenceUsed: [],
   };
 
   if (ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE) {
@@ -3036,7 +2222,6 @@ export async function runTailoringPipeline({
       selectedEvidence = buildSelectedEvidencePack(
         candidateProfileView,
         requiredProfile,
-        candidateClarificationContext,
       );
       pipelineTrace.push("Layer7A: selected-evidence:rule:done");
 
@@ -3047,8 +2232,7 @@ export async function runTailoringPipeline({
           buildSelectedEvidenceInstructions(normalizedOutputLanguage),
           JSON.stringify(
             {
-              candidateProfile: candidateProfileForTailoring,
-              candidateClarifications: candidateClarificationContext,
+              candidateProfile: normalizedCandidateProfile,
               structuredJob,
               requiredProfile,
               candidateProfileView,
@@ -3073,7 +2257,7 @@ export async function runTailoringPipeline({
       observationPoints.push(makeObservation(
         "Layer7_SelectedEvidence",
         `Experience signals: ${candidateProfileView.experienceSignals.length}, requirement signals: ${requiredProfile.requirementSignals.length}`,
-        `Strong: ${selectedEvidence.strongEvidence.length}, support: ${selectedEvidence.supportEvidence.length}, clarification-used: ${selectedEvidence.clarificationEvidenceUsed.length}, top combined: ${selectedEvidence.combinedTopEvidence.length}`,
+        `Strong: ${selectedEvidence.strongEvidence.length}, support: ${selectedEvidence.supportEvidence.length}, transferable: ${selectedEvidence.transferableEvidence.length}, top combined: ${selectedEvidence.combinedTopEvidence.length}`,
         ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE_AI ? "ai" : "rule_fallback",
         ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE_AI ? 0.85 : 0.6,
         tLayer7,
@@ -3089,29 +2273,10 @@ export async function runTailoringPipeline({
 
   let missingSignals: string[] = [];
   try {
-    const rawMissing = buildMissingSignals(candidateProfileView, requiredProfile);
-
-    // EXP-04: moderate rule-track missingSignals using L7 weakEvidence
-    // If L7 AI found evidence for a rule-flagged gap, remove it from missingSignals.
-    // Safety net: if moderation would empty the list entirely, keep the rule-track result.
-    if (ENGINE_SWITCHES.LAYER_7_SELECTED_EVIDENCE_AI && selectedEvidence.weakEvidence.length > 0) {
-      const weakLower = new Set(selectedEvidence.weakEvidence.map((s) => s.toLowerCase()));
-      // A rule-track gap is retained only if L7 also flagged it as weak evidence
-      // (meaning both tracks agree it is a real gap)
-      const reconciled = rawMissing.filter((signal) =>
-        weakLower.has(signal.toLowerCase()) ||
-        selectedEvidence.weakEvidence.some((w) =>
-          scoreOverlap(w, signal) >= 2
-        )
-      );
-      missingSignals = reconciled.length > 0 ? reconciled : rawMissing;
-      pipelineTrace.push(
-        `Layer7C: missingSignals:reconciled — rule:${rawMissing.length} → reconciled:${missingSignals.length}`
-      );
-    } else {
-      missingSignals = rawMissing;
-    }
-    // EXP-04 end
+    missingSignals = buildMissingSignals(
+      candidateProfileView,
+      requiredProfile,
+    );
   } catch (err) {
     console.error("[runTailoringPipeline] missingSignals failed — continuing:", err);
   }
@@ -3124,15 +2289,6 @@ export async function runTailoringPipeline({
     positioningStrategy: "",
     coverLetterAngle: "",
     cvEmphasis: [],
-    applicationStrategy: {
-      cvLeadEvidence: [],
-      coverLetterOpeningAngle: "",
-      gapHandling: [],
-      confidenceLevel: "careful",
-      toneGuidance: [],
-      priorityThemes: [],
-      doNotOverclaim: [],
-    },
   };
 
   if (ENGINE_SWITCHES.LAYER_8_POSITIONING) {
@@ -3140,7 +2296,7 @@ export async function runTailoringPipeline({
       const tLayer8 = Date.now();
       pipelineTrace.push("Layer8A: positioning:rule:start");
       positioningBrief = buildPositioningBriefPack(
-        candidateProfileForTailoring,
+        normalizedCandidateProfile,
         structuredJob,
         selectedEvidence,
         missingSignals,
@@ -3153,7 +2309,7 @@ export async function runTailoringPipeline({
         const aiPositioning = await callAiJson<Record<string, unknown>>(
           buildPositioningBriefPrompt({
             locale: normalizedOutputLanguage,
-            candidateProfileJson: toJsonString(candidateProfileForTailoring),
+            candidateProfileJson: toJsonString(normalizedCandidateProfile),
             structuredJobJson: toJsonString(structuredJob),
             requiredProfileJson: toJsonString(requiredProfile),
             companyContextJson: toJsonString(companyContext),
@@ -3162,7 +2318,6 @@ export async function runTailoringPipeline({
           JSON.stringify(
             {
               instruction: "Return valid JSON only.",
-              candidateClarifications: candidateClarificationContext,
             },
             null,
             2,
@@ -3216,6 +2371,7 @@ export async function runTailoringPipeline({
       recommendation = buildRecommendationPack(
         selectedEvidence,
         missingSignals,
+        marketSignals,
       );
       pipelineTrace.push("Layer9A: recommendation:rule:done");
 
@@ -3226,16 +2382,14 @@ export async function runTailoringPipeline({
           buildApplicationRecommendationInstructions(normalizedOutputLanguage),
           JSON.stringify(
             {
-              candidateProfile: candidateProfileForTailoring,
-              candidateClarifications: candidateClarificationContext,
+              candidateProfile: normalizedCandidateProfile,
               structuredJob,
               requiredProfile,
-              // companyContext included for environmental framing only — must not affect fit verdict
               companyContext,
+              companyResearch,
+              marketSignals,
               selectedEvidence,
               missingSignals,
-              // companyResearch and marketSignals intentionally excluded from recommendation inputs
-              // they are enrichment-only signals used at document generation time (L11)
             },
             null,
             2,
@@ -3271,98 +2425,9 @@ export async function runTailoringPipeline({
     }
   }
 
-  // ── Layer 9C — Recommendation Validation ─────────────────────────────────────
-  if (ENGINE_SWITCHES.LAYER_RECOMMENDATION_VALIDATION) {
-    try {
-      const tValidation = Date.now();
-      pipelineTrace.push("Layer9C: recommendation-validation:start");
-
-      const { recommendation: validatedRecommendation, validation } =
-        validateRecommendation(recommendation, positioningBrief);
-
-      recommendation = validatedRecommendation;
-
-      pipelineTrace.push(
-        validation.triggered
-          ? "Layer9C: recommendation-validation:upgraded"
-          : "Layer9C: recommendation-validation:no-change",
-      );
-
-      observationPoints.push(makeObservation(
-        "Layer9C_RecommendationValidation",
-        `L9 label: "${validation.originalLabel}", positioningStrength: "${positioningBrief.positioningStrength}", blockers: ${recommendation.blockers.length}, strongMatches: ${recommendation.strongMatches.length}`,
-        validation.triggered
-          ? `Contradiction detected — upgraded to "${validation.correctedLabel}". Reason: ${validation.reason}`
-          : `No contradiction. ${validation.reason}`,
-        "rule",
-        1.0,
-        tValidation,
-        [],
-        "The recommendation was cross-checked against positioning strength and evidence quality.",
-      ));
-    } catch (err) {
-      console.error("[runTailoringPipeline] Layer9C validation failed — continuing:", err);
-      pipelineTrace.push("Layer9C: recommendation-validation:error:caught");
-    }
-  }
-
-  // Layer 9D — Deterministic seniority sanity-check (candidate vs target role)
-  try {
-    recommendation = applySeniorityMismatchCheck(
-      recommendation,
-      candidateProfileForTailoring,
-      structuredJob,
-      marketSignals,
-    );
-    pipelineTrace.push("Layer9D: recommendation-seniority-check:done");
-  } catch (err) {
-    console.error("[runTailoringPipeline] Layer9D seniority check failed — continuing:", err);
-    pipelineTrace.push("Layer9D: recommendation-seniority-check:error:caught");
-  }
-
-  // Layer 9.5 — Truth layer setup (deterministic evidence map)
-  pipelineTrace.push("Layer9.5A: truth-layer-setup:start");
-  const truthEvidenceMap = buildTruthEvidenceMap({
-    candidateProfileForTailoring,
-    selectedEvidence,
-    candidateClarificationContext,
-  });
-  pipelineTrace.push("Layer9.5A: truth-layer-setup:done");
-
-  // Layer 9.6 — Language polish setup (keywords + tone only)
-  pipelineTrace.push("Layer9.6A: language-polish-setup:start");
-  const jobKeywords = extractJobKeywords(structuredJob);
-  const companyTone = deriveCompanyTone(
-    companyContext,
-    companyResearch,
-    marketSignals,
-  );
-  pipelineTrace.push("Layer9.6A: language-polish-setup:done");
-
-  const clarificationUsage: ClarificationUsageMap = {
-    profile: candidateClarificationContext?.signals.map((signal) => signal.label) ?? [],
-    selectedEvidence: selectedEvidence.clarificationEvidenceUsed,
-    recommendation:
-      (candidateClarificationContext?.signals ?? [])
-        .map((signal) => signal.label)
-        .filter((label) => {
-          const recommendationText = [
-            recommendation.reasoningSummary,
-            recommendation.recommendation,
-            ...recommendation.strongMatches,
-            ...recommendation.riskAreas,
-          ].join(" \n ");
-          return scoreOverlap(label, recommendationText) >= 1;
-        }),
-    cv: [],
-    coverLetter: [],
-    truthLayer: [],
-  };
-
   let bundle: BundleAssembly = {
-    candidateProfile: candidateProfileForTailoring,
+    candidateProfile: normalizedCandidateProfile,
     candidateProfileView,
-    candidateClarifications: candidateClarificationContext,
     jobProfile,
     structuredJob,
     requiredProfile,
@@ -3372,7 +2437,6 @@ export async function runTailoringPipeline({
     selectedEvidence,
     positioningBrief,
     recommendation,
-    clarificationUsage,
   };
 
   if (ENGINE_SWITCHES.LAYER_10_BUNDLE_ASSEMBLY) {
@@ -3399,7 +2463,7 @@ export async function runTailoringPipeline({
   }
 
   const positioningBriefText = buildPositioningBriefText(
-    candidateProfileForTailoring,
+    normalizedCandidateProfile,
     structuredJob,
     positioningBrief,
     missingSignals,
@@ -3463,25 +2527,9 @@ export async function runTailoringPipeline({
   if (ENGINE_SWITCHES.LAYER_11_GENERATION) {
     try {
       const tLayer11 = Date.now();
-      const cvClarificationHints = buildCvClarificationUsageHints(
-        candidateClarificationContext?.signals ?? [],
-        requiredProfile,
-      );
-      const coverLetterClarificationHints = buildCoverLetterClarificationUsageHints(
-        candidateClarificationContext?.signals ?? [],
-        requiredProfile,
-      );
       pipelineTrace.push("Layer11A: cv-draft:start");
       // Rule-based draft is the baseline
-      cvDraft = buildCvDraft(candidateProfileForTailoring, bundle);
-      if (cvClarificationHints.length > 0) {
-        cvDraft = [
-          cvDraft,
-          "",
-          "Clarified supporting signals (user-provided, unverified):",
-          ...cvClarificationHints.map((item) => `- ${item}`),
-        ].join("\n");
-      }
+      cvDraft = buildCvDraft(normalizedCandidateProfile, bundle);
       pipelineTrace.push("Layer11A: cv-draft:done");
 
       // AI CV generation — upgrades the rule-based baseline to a fully tailored document
@@ -3491,12 +2539,10 @@ export async function runTailoringPipeline({
           normalizedOutputLanguage,
           "Strong polished professional",
           languageContext || null,
-          positioningBrief.applicationStrategy,
         ),
         JSON.stringify(
           {
-            candidateProfile: candidateProfileForTailoring,
-            candidateClarifications: candidateClarificationContext,
+            candidateProfile: normalizedCandidateProfile,
             bundle,
           },
           null,
@@ -3512,7 +2558,7 @@ export async function runTailoringPipeline({
 
       pipelineTrace.push("Layer11B: cover-letter:base:start");
       coverLetterDraft = buildCoverLetterDraft(
-        candidateProfileForTailoring,
+        normalizedCandidateProfile,
         bundle,
         normalizedOutputLanguage,
       );
@@ -3526,12 +2572,10 @@ export async function runTailoringPipeline({
             normalizedOutputLanguage,
             "Strong polished professional",
             languageContext || null,
-            positioningBrief.applicationStrategy,
           ),
           JSON.stringify(
             {
-              candidateProfile: candidateProfileForTailoring,
-              candidateClarifications: candidateClarificationContext,
+              candidateProfile: normalizedCandidateProfile,
               bundle,
             },
             null,
@@ -3546,50 +2590,6 @@ export async function runTailoringPipeline({
           pipelineTrace.push("Layer11C: cover-letter:ai:fallback");
         }
       }
-
-      if (coverLetterClarificationHints.length > 0) {
-        const strategicHint = coverLetterClarificationHints[0];
-        coverLetterDraft = `${coverLetterDraft}\n\nAdditional strategic support (from user clarification): ${strategicHint}.`;
-      }
-      clarificationUsage.cv = cvClarificationHints;
-      clarificationUsage.coverLetter = coverLetterClarificationHints;
-
-      // Layer 9.5 execution — truth layer runs before final generation output usage.
-      const truthResult = validateTruthLayer(
-        cvDraft,
-        coverLetterDraft,
-        truthEvidenceMap,
-      );
-      cvDraft = truthResult.correctedCv;
-      coverLetterDraft = truthResult.correctedCoverLetter;
-
-      clarificationUsage.truthLayer = [
-        ...truthResult.truthReport.cv.softened.map((signal) => ({
-          signal,
-          action: "softened" as const,
-          reason: "Downgraded due to missing high-confidence evidence.",
-        })),
-        ...truthResult.truthReport.coverLetter.softened.map((signal) => ({
-          signal,
-          action: "softened" as const,
-          reason: "Downgraded due to missing high-confidence evidence.",
-        })),
-      ];
-
-      // Layer 9.6 execution — language polish after truth, never before.
-      cvDraft = polishLanguageLayer(
-        cvDraft,
-        jobKeywords,
-        companyTone,
-        normalizedOutputLanguage,
-      );
-      coverLetterDraft = polishLanguageLayer(
-        coverLetterDraft,
-        jobKeywords,
-        companyTone,
-        normalizedOutputLanguage,
-      );
-      bundle.truthReport = truthResult.truthReport;
 
       observationPoints.push(makeObservation(
         "Layer11_Generation",
@@ -3683,18 +2683,6 @@ export async function runTailoringPipeline({
   // Risk areas = riskAreas: gaps or weaknesses in the candidature (shown separately on Final page).
   // These must be distinct so the Final page can surface them as genuinely different sections.
   const warnings = Array.from(new Set([...recommendation.blockers, ...pipelineWarnings]));
-  reviewFindings =
-    typeof reviewFindings === "object" && reviewFindings !== null
-      ? {
-          ...asRecord(reviewFindings),
-          truthLayer: bundle.truthReport ?? null,
-          clarificationUsage: clarificationUsage.truthLayer,
-        }
-      : {
-          summary: reviewFindings,
-          truthLayer: bundle.truthReport ?? null,
-          clarificationUsage: clarificationUsage.truthLayer,
-        };
 
   const finalDrafts: WorkspaceFinalDrafts = {
     cvDraft,

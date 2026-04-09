@@ -53,6 +53,80 @@ export type WorkspaceVerifiedClaim = {
   confidence: WorkspaceVerifiedClaimConfidence;
 };
 
+export type WorkspaceCapabilityEvidence = {
+  sourceType:
+    | "role_achievement"
+    | "core_skill"
+    | "tool"
+    | "standard"
+    | "industry"
+    | "verified_claim"
+    | "language"
+    | "certification"
+    | "education";
+  roleIndex?: number;
+  rawText: string;
+  normalizedText: string;
+};
+
+export type WorkspaceCandidateCapability = {
+  capabilityId: string;
+  label: string;
+  category:
+    | "responsibility"
+    | "skill"
+    | "tool"
+    | "standard"
+    | "domain"
+    | "leadership"
+    | "process"
+    | "compliance";
+  strength: "core" | "supporting";
+  confidence: "high" | "medium" | "weak";
+  evidenceCount: number;
+  evidence: WorkspaceCapabilityEvidence[];
+  aliases: string[];
+};
+
+export type WorkspaceCandidateLanguageCapability = {
+  language: string;
+  proficiency: string | null;
+  normalizedLanguage: string;
+};
+
+export type WorkspaceCandidateCertificationCapability = {
+  name: string;
+  issuer: string | null;
+  date: string | null;
+  normalizedName: string;
+};
+
+export type WorkspaceCandidateEducationCapability = {
+  degree: string;
+  field: string | null;
+  institution: string | null;
+  endDate: string | null;
+  normalizedDegree: string;
+};
+
+export type WorkspaceCandidateIndustryCapability = {
+  label: string;
+  normalizedLabel: string;
+};
+
+export type WorkspaceCandidateCapabilityInventory = {
+  capabilities: WorkspaceCandidateCapability[];
+  facets: {
+    language: WorkspaceCandidateLanguageCapability[];
+    certification: WorkspaceCandidateCertificationCapability[];
+    education: WorkspaceCandidateEducationCapability[];
+    industry: WorkspaceCandidateIndustryCapability[];
+  };
+  provenance: {
+    generatedAt: string;
+  };
+};
+
 export type WorkspaceCandidateProfile = {
   fullName?: string | null;
   headline?: string | null;
@@ -241,11 +315,30 @@ export type WorkspaceRunTelemetry = {
   stages: WorkspaceStageTelemetry[];
 };
 
+export type WorkspaceClarificationUpdateStatus =
+  | "idle"
+  | "saving_clarifications"
+  | "rerunning"
+  | "rerun_succeeded"
+  | "rerun_failed";
+
 export type WorkspaceState = {
   candidateProfile: WorkspaceCandidateProfile | null;
+  // Derived reasoning snapshot generated from the canonical profile.
+  capabilityInventory: WorkspaceCandidateCapabilityInventory | null;
   jobProfile: WorkspaceJobProfile | null;
   insights: WorkspaceInsights | null;
   finalDrafts: WorkspaceFinalDrafts | null;
+  // Preserved baseline draft snapshot captured from the first successful run.
+  originalFinalDrafts: WorkspaceFinalDrafts | null;
+  // Candidate clarification answers captured on Insights > Recommendation.
+  recommendationClarifications: Record<string, string>;
+  // Navigation-safe status machine for Insights clarification update reruns.
+  clarificationUpdateStatus: WorkspaceClarificationUpdateStatus;
+  clarificationUpdateError: string | null;
+  clarificationUpdateStartedAt: string | null;
+  // Controls whether Final shows latest regenerated drafts or preserved baseline drafts.
+  finalDraftPreference: "latest" | "original";
 
   // Persistent document library — survives refresh/navigation via sessionStorage.
   documents: WorkspaceDocument[];

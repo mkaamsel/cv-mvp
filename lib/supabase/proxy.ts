@@ -2,7 +2,14 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-const protectedRoutes = ["/dashboard", "/profile", "/tailoring", "/tailoring/new"];
+const protectedRoutes = [
+  "/dashboard",
+  "/profile",
+  "/tailoring",
+  "/tailoring/new",
+  "/workspace",
+  "/settings",
+];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -48,9 +55,23 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
+  if (!user.email_confirmed_at) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("next", pathname);
+    loginUrl.searchParams.set("verify", "required");
+    return NextResponse.redirect(loginUrl);
+  }
+
   return response;
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/profile", "/tailoring", "/tailoring/:path*"],
+  matcher: [
+    "/dashboard/:path*",
+    "/profile",
+    "/tailoring",
+    "/tailoring/:path*",
+    "/workspace/:path*",
+    "/settings",
+  ],
 };
