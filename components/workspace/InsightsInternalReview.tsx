@@ -1,3 +1,6 @@
+// INTERNAL-ONLY SNAPSHOT (not for release):
+// Preserved copy of Insights page with lower internal review/debug panels.
+// Kept for internal QA and potential restoration.
 "use client";
 
 import {
@@ -2707,10 +2710,6 @@ export default function WorkspaceInsightsPage() {
         </div>
       )}
 
-      {/* Internal review/debug block removed from candidate-facing release view.
-          Preserved in components/workspace/InsightsInternalReview.tsx */}
-      {false && (
-        <>
       {/* ── Internal divider ─────────────────────────────────────────────────── */}
       <div
         style={{
@@ -3261,8 +3260,6 @@ export default function WorkspaceInsightsPage() {
             </pre>
           </AppCard>
         </div>
-      )}
-        </>
       )}
     </div>
   );
