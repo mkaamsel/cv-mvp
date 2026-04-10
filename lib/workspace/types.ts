@@ -162,7 +162,7 @@ export type WorkspaceJobExtractionSource =
   | "readable-fallback+user-text-fallback"
   | "blocked-or-thin-content";
 
-export type WorkspaceOutputLanguage = "de" | "en";
+export type WorkspaceOutputLanguage = "de" | "en" | "es";
 
 export type WorkspaceJobProfile = {
   companyName?: string;

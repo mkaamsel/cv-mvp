@@ -67,7 +67,7 @@ type WorkspaceContextValue = {
 
   startTelemetryRun: (payload: {
     runId: string;
-    language?: "en" | "de" | null;
+    language?: "en" | "de" | "es" | null;
     inputType?: WorkspaceInputType;
     userGeography?: string | null;
     jobGeography?: string | null;
@@ -336,7 +336,9 @@ function restoreTelemetry(value: unknown): WorkspaceRunTelemetry | null {
       typeof value.completedAt === "string" ? value.completedAt : null,
     durationMs: typeof value.durationMs === "number" ? value.durationMs : null,
     language:
-      value.language === "en" || value.language === "de" ? value.language : null,
+      value.language === "en" || value.language === "de" || value.language === "es"
+        ? value.language
+        : null,
     inputType: isInputType(value.inputType) ? value.inputType : "unknown",
     userGeography:
       typeof value.userGeography === "string" ? value.userGeography : null,
@@ -879,21 +881,31 @@ export default function WorkspaceProvider({
   }, []);
 
   const setFinalDrafts = useCallback((drafts: WorkspaceFinalDrafts | null) => {
+    const canonicalDrafts = drafts
+      ? {
+          ...drafts,
+          cvDraft: drafts.cvDraft || drafts.finalCv || "",
+          finalCv: drafts.cvDraft || drafts.finalCv || "",
+          coverLetterDraft: drafts.coverLetterDraft || drafts.finalCoverLetter || "",
+          finalCoverLetter: drafts.coverLetterDraft || drafts.finalCoverLetter || "",
+        }
+      : null;
+
     setState((current) => ({
       ...current,
-      finalDrafts: drafts,
-      originalFinalDrafts: drafts
-        ? current.originalFinalDrafts ?? drafts
+      finalDrafts: canonicalDrafts,
+      originalFinalDrafts: canonicalDrafts
+        ? current.originalFinalDrafts ?? canonicalDrafts
         : null,
-      finalDraftPreference: drafts ? current.finalDraftPreference : "latest",
-      clarificationUpdateStatus: drafts
+      finalDraftPreference: canonicalDrafts ? current.finalDraftPreference : "latest",
+      clarificationUpdateStatus: canonicalDrafts
         ? current.clarificationUpdateStatus
         : "idle",
-      clarificationUpdateError: drafts ? current.clarificationUpdateError : null,
-      clarificationUpdateStartedAt: drafts
+      clarificationUpdateError: canonicalDrafts ? current.clarificationUpdateError : null,
+      clarificationUpdateStartedAt: canonicalDrafts
         ? current.clarificationUpdateStartedAt
         : null,
-      finalStatus: drafts ? "ready" : "idle",
+      finalStatus: canonicalDrafts ? "ready" : "idle",
       finalError: null,
     }));
   }, []);
@@ -1001,7 +1013,7 @@ export default function WorkspaceProvider({
   const startTelemetryRun = useCallback(
     (payload: {
       runId: string;
-      language?: "en" | "de" | null;
+      language?: "en" | "de" | "es" | null;
       inputType?: WorkspaceInputType;
       userGeography?: string | null;
       jobGeography?: string | null;

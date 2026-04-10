@@ -8,7 +8,7 @@ export async function runApplicationPipeline(input: {
     jobDescriptionText?: string;
     jobDescription?: string;
   } | null;
-  outputLanguage?: "en" | "de";
+  outputLanguage?: "en" | "de" | "es";
   origin?: string;
   cookieHeader?: string;
 }) {

@@ -9,6 +9,7 @@ import { useWorkspace } from "@/components/workspace/WorkspaceProvider";
 import type {
   WorkspaceFinalDrafts,
   WorkspaceInsights,
+  WorkspaceOutputLanguage,
 } from "@/lib/workspace/types";
 import { designTokens } from "@/lib/design/tokens";
 
@@ -36,10 +37,10 @@ function asStringArray(value: unknown): string[] {
 
 function extractFinalCv(finalDrafts: WorkspaceFinalDrafts | null): string {
   return (
-    finalDrafts?.finalCv ||
-    finalDrafts?.cvDraft ||
-    asString(asRecord(finalDrafts?.drafts)?.finalCv) ||
     asString(asRecord(finalDrafts?.drafts)?.cvDraft) ||
+    finalDrafts?.cvDraft ||
+    finalDrafts?.finalCv ||
+    asString(asRecord(finalDrafts?.drafts)?.finalCv) ||
     ""
   );
 }
@@ -48,10 +49,10 @@ function extractFinalCoverLetter(
   finalDrafts: WorkspaceFinalDrafts | null,
 ): string {
   return (
-    finalDrafts?.finalCoverLetter ||
-    finalDrafts?.coverLetterDraft ||
-    asString(asRecord(finalDrafts?.drafts)?.finalCoverLetter) ||
     asString(asRecord(finalDrafts?.drafts)?.coverLetterDraft) ||
+    finalDrafts?.coverLetterDraft ||
+    finalDrafts?.finalCoverLetter ||
+    asString(asRecord(finalDrafts?.drafts)?.finalCoverLetter) ||
     ""
   );
 }
@@ -109,7 +110,8 @@ type DocTab = "cv" | "coverletter";
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function WorkspaceFinalPage() {
-  const { state, progress } = useWorkspace();
+  const { state, progress, setFinalDrafts, setFinalDraftPreference, setFinalError } =
+    useWorkspace();
 
   const finalDrafts =
     state.finalDraftPreference === "original" && state.originalFinalDrafts
@@ -128,7 +130,8 @@ export default function WorkspaceFinalPage() {
   });
 
   const runId = finalDrafts?.runId || state.telemetry?.runId || "";
-  const outputLanguage = finalDrafts?.outputLanguage || state.jobProfile?.outputLanguage || "en";
+  const outputLanguage =
+    (finalDrafts?.outputLanguage || state.jobProfile?.outputLanguage || "en") as WorkspaceOutputLanguage;
 
   const hasFinalDrafts = Boolean(finalDrafts);
   const hasCv = Boolean(finalCv);
@@ -140,6 +143,7 @@ export default function WorkspaceFinalPage() {
   const [sendClicked, setSendClicked] = useState(false);
   const [copyingCv, setCopyingCv] = useState(false);
   const [copyingCl, setCopyingCl] = useState(false);
+  const [switchingLanguage, setSwitchingLanguage] = useState<WorkspaceOutputLanguage | null>(null);
 
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -167,6 +171,71 @@ export default function WorkspaceFinalPage() {
       }
     } catch {
       // ignore clipboard errors
+    }
+  }
+
+  async function handleLanguageSwitch(targetLanguage: WorkspaceOutputLanguage) {
+    if (!state.insights?.bundle) return;
+    if (targetLanguage === outputLanguage) return;
+    setSwitchingLanguage(targetLanguage);
+    setFinalError(null);
+    try {
+      const response = await fetch("/api/tailoring/regenerate-documents", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          outputLanguage: targetLanguage,
+          bundle: state.insights.bundle,
+          runId,
+        }),
+      });
+
+      const data = (await response.json()) as {
+        ok?: boolean;
+        message?: string;
+        outputLanguage?: WorkspaceOutputLanguage;
+        cvText?: string;
+        coverLetterText?: string;
+        finalDrafts?: WorkspaceFinalDrafts;
+      };
+
+      const nextDrafts = data.finalDrafts;
+      const nextCv =
+        data.cvText ||
+        nextDrafts?.cvDraft ||
+        nextDrafts?.finalCv ||
+        asString(asRecord(nextDrafts?.drafts)?.finalCv) ||
+        asString(asRecord(nextDrafts?.drafts)?.cvDraft) ||
+        "";
+      const nextCoverLetter =
+        data.coverLetterText ||
+        nextDrafts?.coverLetterDraft ||
+        nextDrafts?.finalCoverLetter ||
+        asString(asRecord(nextDrafts?.drafts)?.finalCoverLetter) ||
+        asString(asRecord(nextDrafts?.drafts)?.coverLetterDraft) ||
+        "";
+
+      if (!response.ok || !data.ok || !nextDrafts || !nextCv.trim() || !nextCoverLetter.trim()) {
+        throw new Error(data.message || "Language switch failed.");
+      }
+
+      const canonicalDrafts: WorkspaceFinalDrafts = {
+        ...nextDrafts,
+        cvDraft: nextCv,
+        finalCv: nextCv,
+        coverLetterDraft: nextCoverLetter,
+        finalCoverLetter: nextCoverLetter,
+        outputLanguage: targetLanguage,
+      };
+
+      setFinalDraftPreference("latest");
+      setFinalDrafts(canonicalDrafts);
+    } catch (err) {
+      setFinalError(err instanceof Error ? err.message : "Language switch failed.");
+    } finally {
+      setSwitchingLanguage(null);
     }
   }
 
@@ -237,6 +306,31 @@ export default function WorkspaceFinalPage() {
               : "Review your CV and cover letter, then send when you are ready."}
           </p>
         )}
+        {hasFinalDrafts && (
+          <div style={languageToggleWrapStyle}>
+            <span style={languageLabelStyle}>Output language</span>
+            <div style={languageButtonsStyle}>
+              {(["de", "en", "es"] as WorkspaceOutputLanguage[]).map((language) => {
+                const isActive = outputLanguage === language;
+                const isLoading = switchingLanguage === language;
+                return (
+                  <button
+                    key={language}
+                    type="button"
+                    onClick={() => void handleLanguageSwitch(language)}
+                    disabled={Boolean(switchingLanguage) || isActive}
+                    style={isActive ? languageActiveButtonStyle : languageButtonStyle}
+                  >
+                    {isLoading ? "..." : language.toUpperCase()}
+                  </button>
+                );
+              })}
+            </div>
+            {switchingLanguage && (
+              <span style={languageUpdatingTextStyle}>Updating documents...</span>
+            )}
+          </div>
+        )}
         {hasFinalDrafts && state.finalDraftPreference === "original" && (
           <p style={{ ...subheadStyle, marginTop: 6 }}>
             Showing your original drafts from before profile update.
@@ -256,8 +350,14 @@ export default function WorkspaceFinalPage() {
             <FeedbackStars
               runId={runId}
               stage="final_documents"
-              prompt={outputLanguage === "de" ? "Diesen Schritt bewerten" : "Rate this step"}
-              locale={outputLanguage === "de" ? "de" : "en"}
+              prompt={
+                outputLanguage === "de"
+                  ? "Diesen Schritt bewerten"
+                  : outputLanguage === "es"
+                    ? "Valora este paso"
+                    : "Rate this step"
+              }
+              locale={outputLanguage}
             />
           </div>
         )}
@@ -314,78 +414,90 @@ export default function WorkspaceFinalPage() {
 
           {/* Document display */}
           <AppCard className="p-6">
-            {activeTab === "cv" && (
-              <>
-                <div style={docHeaderStyle}>
-                  <span style={docLabelStyle}>CV</span>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => void handleCopy(finalCv, "cv")}
-                      style={ghostButtonStyle}
-                    >
-                      {copyingCv ? "Copied" : "Copy"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleDownload(
-                          finalCv,
-                          `CV_${jobTitle.replace(/\s+/g, "_")}.txt`,
-                        )
-                      }
-                      style={ghostButtonStyle}
-                    >
-                      Download
-                    </button>
+            <div style={{ position: "relative" }}>
+              {switchingLanguage && (
+                <div style={panelLoadingOverlayStyle}>
+                  <div style={panelLoadingBoxStyle}>
+                    <span style={loadingDotStyle} />
+                    <span style={panelLoadingTextStyle}>
+                      Updating documents...
+                    </span>
                   </div>
                 </div>
-                {hasCv ? (
-                  <DocumentText text={finalCv} />
-                ) : (
-                  <div style={missingDocStyle}>
-                    CV not available. Return to the Job step and regenerate.
+              )}
+              {activeTab === "cv" && (
+                <>
+                  <div style={docHeaderStyle}>
+                    <span style={docLabelStyle}>CV</span>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopy(finalCv, "cv")}
+                        style={ghostButtonStyle}
+                      >
+                        {copyingCv ? "Copied" : "Copy"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDownload(
+                            finalCv,
+                            `CV_${jobTitle.replace(/\s+/g, "_")}.txt`,
+                          )
+                        }
+                        style={ghostButtonStyle}
+                      >
+                        Download
+                      </button>
+                    </div>
                   </div>
-                )}
-              </>
-            )}
+                  {hasCv ? (
+                    <DocumentText text={finalCv} />
+                  ) : (
+                    <div style={missingDocStyle}>
+                      CV not available. Return to the Job step and regenerate.
+                    </div>
+                  )}
+                </>
+              )}
 
-            {activeTab === "coverletter" && (
-              <>
-                <div style={docHeaderStyle}>
-                  <span style={docLabelStyle}>Cover Letter</span>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => void handleCopy(finalCoverLetter, "cl")}
-                      style={ghostButtonStyle}
-                    >
-                      {copyingCl ? "Copied" : "Copy"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleDownload(
-                          finalCoverLetter,
-                          `CoverLetter_${jobTitle.replace(/\s+/g, "_")}.txt`,
-                        )
-                      }
-                      style={ghostButtonStyle}
-                    >
-                      Download
-                    </button>
+              {activeTab === "coverletter" && (
+                <>
+                  <div style={docHeaderStyle}>
+                    <span style={docLabelStyle}>Cover Letter</span>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopy(finalCoverLetter, "cl")}
+                        style={ghostButtonStyle}
+                      >
+                        {copyingCl ? "Copied" : "Copy"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDownload(
+                            finalCoverLetter,
+                            `CoverLetter_${jobTitle.replace(/\s+/g, "_")}.txt`,
+                          )
+                        }
+                        style={ghostButtonStyle}
+                      >
+                        Download
+                      </button>
+                    </div>
                   </div>
-                </div>
-                {hasCoverLetter ? (
-                  <DocumentText text={finalCoverLetter} />
-                ) : (
-                  <div style={missingDocStyle}>
-                    Cover letter not available. Return to the Job step and
-                    regenerate.
-                  </div>
-                )}
-              </>
-            )}
+                  {hasCoverLetter ? (
+                    <DocumentText text={finalCoverLetter} />
+                  ) : (
+                    <div style={missingDocStyle}>
+                      Cover letter not available. Return to the Job step and
+                      regenerate.
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </AppCard>
 
           {/* Action bar */}
@@ -504,6 +616,52 @@ const subheadStyle: CSSProperties = {
   maxWidth: 680,
 };
 
+const languageToggleWrapStyle: CSSProperties = {
+  marginTop: 14,
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+};
+
+const languageLabelStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: t.colors.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+};
+
+const languageButtonsStyle: CSSProperties = {
+  display: "flex",
+  gap: 6,
+};
+
+const languageButtonStyle: CSSProperties = {
+  border: `1px solid ${t.colors.border}`,
+  borderRadius: t.radius.sm,
+  background: t.colors.surface,
+  color: t.colors.textPrimary,
+  fontSize: 12,
+  fontWeight: 700,
+  padding: "6px 10px",
+  cursor: "pointer",
+  minWidth: 44,
+};
+
+const languageActiveButtonStyle: CSSProperties = {
+  ...languageButtonStyle,
+  background: t.colors.primary,
+  color: t.colors.textOnPrimary,
+  cursor: "default",
+};
+
+const languageUpdatingTextStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: t.colors.textSecondary,
+};
+
 const emptyStateStyle: CSSProperties = {
   borderRadius: t.radius.md,
   border: `1px solid ${t.colors.border}`,
@@ -579,6 +737,42 @@ const missingDocStyle: CSSProperties = {
   padding: "20px 0",
   fontSize: 14,
   color: t.colors.textMuted,
+};
+
+const panelLoadingOverlayStyle: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  background: "rgba(255,255,255,0.66)",
+  backdropFilter: "blur(1px)",
+  borderRadius: t.radius.md,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 3,
+};
+
+const panelLoadingBoxStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 10,
+  border: `1px solid ${t.colors.border}`,
+  borderRadius: t.radius.sm,
+  background: t.colors.surface,
+  padding: "10px 14px",
+};
+
+const loadingDotStyle: CSSProperties = {
+  width: 10,
+  height: 10,
+  borderRadius: "50%",
+  background: t.colors.primary,
+  opacity: 0.9,
+};
+
+const panelLoadingTextStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: t.colors.textSecondary,
 };
 
 const ghostButtonStyle: CSSProperties = {

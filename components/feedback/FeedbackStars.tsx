@@ -5,7 +5,7 @@ import { designTokens } from "@/lib/design/tokens";
 
 const t = designTokens;
 
-type FeedbackLocale = "en" | "de";
+type FeedbackLocale = "en" | "de" | "es";
 
 type FeedbackStarsProps = {
   runId?: string;
@@ -38,6 +38,23 @@ function getCopy(locale: FeedbackLocale) {
       skip: "Überspringen",
       error: "Feedback konnte nicht gespeichert werden.",
       alreadySubmitted: "Feedback bereits gespeichert.",
+    };
+  }
+
+  if (locale === "es") {
+    return {
+      saved: "Gracias por tu feedback.",
+      helperDefault: "1-3 rojo, 4-7 amarillo, 8-10 verde",
+      helperLow: "Necesita mejoras",
+      helperMid: "Aceptable",
+      helperHigh: "Buen resultado",
+      improveTitle: "Que deberiamos mejorar aqui?",
+      placeholder: "Feedback opcional",
+      submit: "Enviar feedback",
+      saving: "Guardando...",
+      skip: "Omitir",
+      error: "No se pudo guardar el feedback.",
+      alreadySubmitted: "Feedback ya guardado.",
     };
   }
 
